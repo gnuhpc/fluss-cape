@@ -61,10 +61,12 @@ public class HBaseCompatServer implements AutoCloseable {
     }
 
     public void start() throws IOException {
+        System.err.println("[SERVER] *** STARTING on " + host + ":" + port);
         LOG.info("Starting HBase compatibility server on {}:{}", host, port);
 
         this.bossGroup = NettyUtils.newEventLoopGroup(1, "hbase-compat-boss");
         this.workerGroup = NettyUtils.newEventLoopGroup(0, "hbase-compat-worker");
+        System.err.println("[SERVER] *** Created event loop groups");
 
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
@@ -81,18 +83,22 @@ public class HBaseCompatServer implements AutoCloseable {
                             new ChannelInitializer<SocketChannel>() {
                                 @Override
                                 protected void initChannel(SocketChannel ch) {
+                                    System.err.println("[SERVER] *** INIT CHANNEL for " + ch.remoteAddress());
                                     ch.pipeline()
                                             .addLast("decoder", new HBaseRpcDecoder())
                                             .addLast("encoder", new HBaseRpcEncoder())
                                             .addLast(
                                                     "handler",
                                                     new HBaseConnectionHandler(requestRouter));
+                                    System.err.println("[SERVER] *** CHANNEL PIPELINE CONFIGURED");
                                 }
                             });
+            System.err.println("[SERVER] *** Bootstrap configured");
 
             this.serverChannel = bootstrap.bind(host, port).sync().channel();
 
             InetSocketAddress bindAddress = (InetSocketAddress) serverChannel.localAddress();
+            System.err.println("[SERVER] *** SUCCESSFULLY BOUND to " + bindAddress.getHostString() + ":" + bindAddress.getPort());
             LOG.info(
                     "HBase compatibility server started on {}:{}",
                     bindAddress.getHostString(),

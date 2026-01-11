@@ -1,0 +1,10 @@
+# Test reports
+test-reports/
+*.log
+
+# Temporary HBase configuration
+.hbase-config-*/
+
+# Backup files
+*.bak
+*~

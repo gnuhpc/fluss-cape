@@ -1,0 +1,98 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║                     Fluss CAPE Functional Test Suite                        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+This test suite validates Redis/Valkey and HBase protocol compatibility
+for both single-instance and multi-instance Fluss CAPE deployments.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 QUICK START EXAMPLES
+
+1. Run all tests (recommended for first-time users):
+   $ ./run-tests.sh
+
+2. Test single instance only:
+   $ ./run-tests.sh -m single
+
+3. Test multi-instance deployment:
+   $ ./run-tests.sh -m multi
+
+4. Test Redis/Valkey protocol only:
+   $ ./run-tests.sh -t redis
+
+5. Test HBase protocol only:
+   $ ./run-tests.sh -t hbase
+
+6. Specific combination (single-instance Redis):
+   $ ./run-tests.sh -m single -t redis
+
+7. Run with verbose output:
+   $ ./run-tests.sh -v
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 CONFIGURATION
+
+Before running tests, ensure:
+
+1. Client binaries are available:
+   $ export VALKEY_CLI=/root/valkey/src/valkey-cli
+   $ export HBASE_CLI=/root/hbase-2.5.13-client/bin/hbase
+
+2. Fluss CAPE instance(s) are running:
+   # Single instance
+   $ docker-compose -f docker-compose.yml up -d
+   
+   # Multi-instance
+   $ docker-compose -f docker-compose-cape-multi-instance.yml up -d
+
+3. Verify connectivity:
+   $ curl http://localhost:8080/health
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 TEST COVERAGE
+
+✅ Redis/Valkey Protocol Tests:
+   • String operations (SET, GET, DEL)
+   • Hash operations (HSET, HGET, HGETALL)
+   • List operations (RPUSH, LLEN, LRANGE)
+   • Set operations (SADD, SCARD, SISMEMBER)
+   • Sorted Set operations (ZADD, ZCARD, ZRANGE)
+
+✅ HBase Protocol Tests:
+   • Table management (CREATE, LIST, EXISTS, DROP)
+   • Put/Get operations (single and bulk)
+   • Scan operations (full, limited, count)
+   • Delete operations (column, row)
+   • Multiple column families
+
+✅ Deployment Modes:
+   • Single instance (direct connection)
+   • Multi-instance (load balancing + service discovery)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📈 TEST REPORTS
+
+1. Console output with colored results (real-time)
+2. Text log files: ./test-reports/test_report_YYYYMMDD_HHMMSS.log
+3. HTML reports (generate after test run):
+   $ ./generate-html-report.sh test-reports/test_report_YYYYMMDD_HHMMSS.log
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 DOCUMENTATION
+
+For detailed information:
+   $ cat README.md
+
+For help:
+   $ ./run-tests.sh --help
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 Ready to start testing? Run: ./run-tests.sh

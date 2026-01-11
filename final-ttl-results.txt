@@ -1,0 +1,31 @@
+Phase 2.3 TTL Test Results
+==========================
+
+String + TTL Tests:
+✓ EXPIRE returns 1
+✓ TTL returns positive
+✓ PERSIST returns 1
+✓ TTL after PERSIST is -1
+
+PEXPIRE + PTTL Tests:
+✓ PEXPIRE returns 1
+✓ PTTL returns positive ms
+
+EXPIREAT Tests:
+✓ EXPIREAT returns 1
+✓ TTL after EXPIREAT
+
+Edge Case Tests:
+✓ TTL on non-existent key
+✓ TTL without expiration
+✓ EXPIRE non-existent returns 0
+
+Expiration Test (3 second wait):
+✓ Key expires automatically
+
+==========================
+Total: 12 tests
+Passed: 12
+Failed: 0
+==========================
+✓ ALL TESTS PASSED

@@ -45,6 +45,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
+import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.ZooDefs;
 import org.apache.zookeeper.ZooKeeper;
 import org.slf4j.Logger;
@@ -52,6 +53,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Main launcher for HBase Compatibility Server.
@@ -79,6 +81,12 @@ public class HBaseCompatServerLauncher {
         String serverId = System.getProperty("server.id", generateServerId(bindAddress, bindPort));
         int healthCheckPort = Integer.parseInt(System.getProperty("health.check.port", "8080"));
 
+        boolean enableRedis =
+                Boolean.parseBoolean(System.getProperty("redis.enable", "true"));
+        String redisBindAddress = System.getProperty("redis.bind.address", "0.0.0.0");
+        int redisPort = Integer.parseInt(System.getProperty("redis.bind.port", "6379"));
+        String redisTableName = System.getProperty("redis.table.name", "default.redis_data");
+
         LOG.info("========================================");
         LOG.info("Starting HBase Compatibility Server");
         LOG.info("========================================");
@@ -87,6 +95,11 @@ public class HBaseCompatServerLauncher {
         LOG.info("Bind address: {}:{}", bindAddress, bindPort);
         LOG.info("ZooKeeper: {}", zkQuorum);
         LOG.info("Tables: {}", tablesList.isEmpty() ? "none (meta only)" : tablesList);
+        LOG.info("Redis enabled: {}", enableRedis);
+        if (enableRedis) {
+            LOG.info("Redis address: {}:{}", redisBindAddress, redisPort);
+            LOG.info("Redis table: {}", redisTableName);
+        }
         LOG.info("========================================");
 
         // Create Fluss connection
@@ -169,6 +182,120 @@ public class HBaseCompatServerLauncher {
             throw e;
         }
 
+        org.apache.fluss.redis.server.RedisCompatServer redisServer = null;
+        if (enableRedis) {
+            try {
+                TablePath redisTablePath = parseTablePath(redisTableName);
+
+                org.apache.fluss.redis.storage.RedisFlussAdapter redisAdapter =
+                        new org.apache.fluss.redis.storage.RedisFlussAdapter(
+                                flussConn, redisTablePath);
+
+                org.apache.fluss.redis.executor.RedisCommandRouter redisRouter =
+                        new org.apache.fluss.redis.executor.RedisCommandRouter();
+
+                org.apache.fluss.redis.executor.StringCommandExecutor stringExecutor =
+                        new org.apache.fluss.redis.executor.StringCommandExecutor(redisAdapter);
+                org.apache.fluss.redis.executor.HashCommandExecutor hashExecutor =
+                        new org.apache.fluss.redis.executor.HashCommandExecutor(redisAdapter);
+                org.apache.fluss.redis.executor.SetCommandExecutor setExecutor =
+                        new org.apache.fluss.redis.executor.SetCommandExecutor(redisAdapter);
+                org.apache.fluss.redis.executor.TypeCommandExecutor typeExecutor =
+                        new org.apache.fluss.redis.executor.TypeCommandExecutor(redisAdapter);
+                org.apache.fluss.redis.executor.ListCommandExecutor listExecutor =
+                        new org.apache.fluss.redis.executor.ListCommandExecutor(redisAdapter);
+                org.apache.fluss.redis.executor.SortedSetCommandExecutor zsetExecutor =
+                        new org.apache.fluss.redis.executor.SortedSetCommandExecutor(
+                                redisAdapter, flussConn, "redis_zset_members");
+                org.apache.fluss.redis.executor.ExpirationCommandExecutor expirationExecutor =
+                        new org.apache.fluss.redis.executor.ExpirationCommandExecutor(redisAdapter);
+
+                redisRouter.registerExecutor("GET", stringExecutor);
+                redisRouter.registerExecutor("SET", stringExecutor);
+                redisRouter.registerExecutor("DEL", stringExecutor);
+                redisRouter.registerExecutor("EXISTS", stringExecutor);
+                redisRouter.registerExecutor("INCR", stringExecutor);
+                redisRouter.registerExecutor("INCRBY", stringExecutor);
+                redisRouter.registerExecutor("PING", stringExecutor);
+                redisRouter.registerExecutor("MGET", stringExecutor);
+                redisRouter.registerExecutor("MSET", stringExecutor);
+                redisRouter.registerExecutor("SETNX", stringExecutor);
+                redisRouter.registerExecutor("SETEX", stringExecutor);
+                redisRouter.registerExecutor("PSETEX", stringExecutor);
+                redisRouter.registerExecutor("MSETNX", stringExecutor);
+                redisRouter.registerExecutor("GETSET", stringExecutor);
+                redisRouter.registerExecutor("APPEND", stringExecutor);
+                redisRouter.registerExecutor("STRLEN", stringExecutor);
+                redisRouter.registerExecutor("DECR", stringExecutor);
+                redisRouter.registerExecutor("DECRBY", stringExecutor);
+
+                redisRouter.registerExecutor("HGET", hashExecutor);
+                redisRouter.registerExecutor("HSET", hashExecutor);
+                redisRouter.registerExecutor("HDEL", hashExecutor);
+                redisRouter.registerExecutor("HEXISTS", hashExecutor);
+                redisRouter.registerExecutor("HGETALL", hashExecutor);
+                redisRouter.registerExecutor("HKEYS", hashExecutor);
+                redisRouter.registerExecutor("HVALS", hashExecutor);
+                redisRouter.registerExecutor("HLEN", hashExecutor);
+                redisRouter.registerExecutor("HMGET", hashExecutor);
+                redisRouter.registerExecutor("HMSET", hashExecutor);
+
+                redisRouter.registerExecutor("SADD", setExecutor);
+                redisRouter.registerExecutor("SREM", setExecutor);
+                redisRouter.registerExecutor("SISMEMBER", setExecutor);
+                redisRouter.registerExecutor("SMEMBERS", setExecutor);
+                redisRouter.registerExecutor("SCARD", setExecutor);
+                redisRouter.registerExecutor("SMOVE", setExecutor);
+
+                redisRouter.registerExecutor("LPUSH", listExecutor);
+                redisRouter.registerExecutor("RPUSH", listExecutor);
+                redisRouter.registerExecutor("LPOP", listExecutor);
+                redisRouter.registerExecutor("RPOP", listExecutor);
+                redisRouter.registerExecutor("LRANGE", listExecutor);
+                redisRouter.registerExecutor("LLEN", listExecutor);
+                redisRouter.registerExecutor("LINDEX", listExecutor);
+
+                redisRouter.registerExecutor("ZADD", zsetExecutor);
+                redisRouter.registerExecutor("ZREM", zsetExecutor);
+                redisRouter.registerExecutor("ZRANGE", zsetExecutor);
+                redisRouter.registerExecutor("ZSCORE", zsetExecutor);
+                redisRouter.registerExecutor("ZCARD", zsetExecutor);
+                redisRouter.registerExecutor("ZRANGEBYSCORE", zsetExecutor);
+
+                redisRouter.registerExecutor("TYPE", typeExecutor);
+                
+                redisRouter.registerExecutor("EXPIRE", expirationExecutor);
+                redisRouter.registerExecutor("EXPIREAT", expirationExecutor);
+                redisRouter.registerExecutor("PEXPIRE", expirationExecutor);
+                redisRouter.registerExecutor("TTL", expirationExecutor);
+                redisRouter.registerExecutor("PTTL", expirationExecutor);
+                redisRouter.registerExecutor("PERSIST", expirationExecutor);
+
+                redisServer =
+                        new org.apache.fluss.redis.server.RedisCompatServer(
+                                redisBindAddress, redisPort, redisRouter);
+                redisServer.start();
+
+                LOG.info("========================================");
+                LOG.info("Redis compatibility server started on {}:{}", redisBindAddress, redisPort);
+                LOG.info("========================================");
+            } catch (Exception e) {
+                LOG.error("Failed to start Redis compatibility server", e);
+                if (redisServer != null) {
+                    redisServer.close();
+                }
+                unregisterFromZooKeeper();
+                if (healthCheckServer != null) {
+                    healthCheckServer.close();
+                }
+                server.close();
+                flussConn.close();
+                throw e;
+            }
+        }
+
+        final org.apache.fluss.redis.server.RedisCompatServer finalRedisServer = redisServer;
+
         LOG.info("========================================");
         LOG.info("HBase Compatibility Server started!");
         LOG.info("========================================");
@@ -185,6 +312,9 @@ public class HBaseCompatServerLauncher {
                                     LOG.info("Received shutdown signal");
                                     try {
                                         unregisterFromZooKeeper();
+                                        if (finalRedisServer != null) {
+                                            finalRedisServer.close();
+                                        }
                                         if (healthCheckServer != null) {
                                             healthCheckServer.close();
                                         }
@@ -294,9 +424,22 @@ public class HBaseCompatServerLauncher {
 
     private static void registerInZooKeeper(String zkQuorum, ServerName serverName, String serverId)
             throws Exception {
-        zooKeeper = new ZooKeeper(zkQuorum, 30000, event -> {});
+        LOG.info("Connecting to ZooKeeper at: {}", zkQuorum);
+        
+        final CountDownLatch connectedSignal = new CountDownLatch(1);
+        zooKeeper = new ZooKeeper(zkQuorum, 30000, event -> {
+            if (event.getState() == Watcher.Event.KeeperState.SyncConnected) {
+                LOG.info("ZooKeeper connected successfully");
+                connectedSignal.countDown();
+            }
+        });
 
-        Thread.sleep(1000);
+        // Wait up to 10 seconds for connection
+        if (!connectedSignal.await(10, TimeUnit.SECONDS)) {
+            throw new RuntimeException("Failed to connect to ZooKeeper within 10 seconds");
+        }
+        
+        LOG.info("ZooKeeper session established, state: {}", zooKeeper.getState());
 
         ensureZNodeExists("/hbase");
         ensureZNodeExists("/hbase/rs");
@@ -320,17 +463,18 @@ public class HBaseCompatServerLauncher {
         byte[] metaServerBytes = buildMetaRegionServerProtobuf(serverName);
 
         try {
-            byte[] existingData = zooKeeper.getData(metaRegionServerZnodePath, false, null);
-            LOG.info(
-                    "Meta region server already registered by another server, updating with our info");
-            zooKeeper.setData(metaRegionServerZnodePath, metaServerBytes, -1);
-        } catch (KeeperException.NoNodeException e) {
+            // Try to create first (most common case for first server)
             zooKeeper.create(
                     metaRegionServerZnodePath,
                     metaServerBytes,
                     ZooDefs.Ids.OPEN_ACL_UNSAFE,
                     CreateMode.PERSISTENT);
             LOG.info("Created meta region server node (first server in cluster)");
+        } catch (KeeperException.NodeExistsException e) {
+            // Node already exists, update it with our info
+            LOG.info(
+                    "Meta region server already registered by another server, updating with our info");
+            zooKeeper.setData(metaRegionServerZnodePath, metaServerBytes, -1);
         }
 
         LOG.info(

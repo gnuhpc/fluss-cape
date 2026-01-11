@@ -42,7 +42,16 @@ public class HBaseConnectionHandler extends SimpleChannelInboundHandler<HBaseRpc
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         super.channelActive(ctx);
+        writeDebugLog("[HANDLER] *** CLIENT CONNECTED: " + ctx.channel().remoteAddress());
+        System.err.println("[HANDLER] *** CLIENT CONNECTED: " + ctx.channel().remoteAddress());
         LOG.info("HBase client connected from {}", ctx.channel().remoteAddress());
+    }
+
+    private void writeDebugLog(String message) {
+        try (java.io.FileWriter fw = new java.io.FileWriter("/tmp/hbase-debug.log", true)) {
+            fw.write(new java.util.Date() + ": " + message + "\n");
+        } catch (Exception e) {
+        }
     }
 
     @Override
@@ -54,12 +63,15 @@ public class HBaseConnectionHandler extends SimpleChannelInboundHandler<HBaseRpc
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, HBaseRpcRequest request)
             throws Exception {
+        System.err.println("[HANDLER] *** CHANNEL READ START: callId=" + request.getCallId() + 
+                " method=" + request.getMethodName());
         LOG.info(
                 "[HANDLER] START channelRead0: callId={}, method={}",
                 request.getCallId(),
                 request.getMethodName());
 
         CompletableFuture<HBaseRpcResponse> responseFuture = requestRouter.route(request);
+        System.err.println("[HANDLER] *** GOT FUTURE FROM ROUTER: callId=" + request.getCallId());
         LOG.info(
                 "[HANDLER] Got future from router for callId={}, method={}",
                 request.getCallId(),
@@ -98,6 +110,8 @@ public class HBaseConnectionHandler extends SimpleChannelInboundHandler<HBaseRpc
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        System.err.println("[HANDLER] *** EXCEPTION CAUGHT: " + cause.getMessage());
+        cause.printStackTrace(System.err);
         LOG.error("Exception caught in HBase connection handler", cause);
         ctx.close();
     }

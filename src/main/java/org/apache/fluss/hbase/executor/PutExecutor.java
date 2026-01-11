@@ -145,6 +145,8 @@ public class PutExecutor implements HBaseOperationExecutor {
             }
 
         } catch (Exception e) {
+            System.err.println("[PUTEXEC] FATAL: Exception in execute() for callId=" + request.getCallId());
+            e.printStackTrace(System.err);
             LOG.error(
                     "[PUTEXEC] FATAL: Exception in execute() for callId=" + request.getCallId(), e);
             return CompletableFuture.completedFuture(
@@ -239,6 +241,8 @@ public class PutExecutor implements HBaseOperationExecutor {
                             })
                     .exceptionally(
                             throwable -> {
+                                System.err.println("[PUTEXEC] EXCEPTION in future chain for callId=" + callId);
+                                throwable.printStackTrace(System.err);
                                 LOG.error(
                                         "[PUTEXEC] EXCEPTION in future chain for callId=" + callId,
                                         throwable);
@@ -250,6 +254,8 @@ public class PutExecutor implements HBaseOperationExecutor {
                             });
 
         } catch (Exception e) {
+            System.err.println("[PUTEXEC] FATAL: Exception initiating executePut for callId=" + callId);
+            e.printStackTrace(System.err);
             LOG.error("[PUTEXEC] FATAL: Exception initiating executePut for callId=" + callId, e);
             return CompletableFuture.completedFuture(HBaseRpcResponse.failure(callId, e));
         }

@@ -1,0 +1,60 @@
+services:
+  hbase-compat-1:
+    image: fluss-hbase-compat:1.0.0
+    container_name: hbase-compat-1
+    network_mode: host
+    environment:
+      - FLUSS_BOOTSTRAP=localhost:35739
+      - ZK_QUORUM=localhost:2181
+      - BIND_ADDRESS=0.0.0.0
+      - BIND_PORT=16030
+      - HEALTH_PORT=8090
+      - SERVER_ID=server-1
+      - TABLES=default.test_table,default.usertable
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  hbase-compat-2:
+    image: fluss-hbase-compat:1.0.0
+    container_name: hbase-compat-2
+    network_mode: host
+    environment:
+      - FLUSS_BOOTSTRAP=localhost:35739
+      - ZK_QUORUM=localhost:2181
+      - BIND_ADDRESS=0.0.0.0
+      - BIND_PORT=16031
+      - HEALTH_PORT=8091
+      - SERVER_ID=server-2
+      - TABLES=default.test_table,default.usertable
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8091/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  hbase-compat-3:
+    image: fluss-hbase-compat:1.0.0
+    container_name: hbase-compat-3
+    network_mode: host
+    environment:
+      - FLUSS_BOOTSTRAP=localhost:35739
+      - ZK_QUORUM=localhost:2181
+      - BIND_ADDRESS=0.0.0.0
+      - BIND_PORT=16032
+      - HEALTH_PORT=8092
+      - SERVER_ID=server-3
+      - TABLES=default.test_table,default.usertable
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8092/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped

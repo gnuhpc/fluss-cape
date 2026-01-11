@@ -40,6 +40,7 @@ public class HBaseRequestRouter {
     }
 
     public CompletableFuture<HBaseRpcResponse> route(HBaseRpcRequest request) {
+        System.err.println("[ROUTER] START route: callId=" + request.getCallId() + ", method=" + request.getMethodName());
         LOG.info(
                 "[ROUTER] START route: callId={}, method={}",
                 request.getCallId(),
@@ -48,6 +49,7 @@ public class HBaseRequestRouter {
         String methodName = request.getMethodName();
         byte[] requestBytes = (byte[]) request.getRequestParam();
 
+        System.err.println("[ROUTER] Extracting table name for method=" + methodName + ", requestBytesSize=" + (requestBytes != null ? requestBytes.length : 0));
         LOG.info(
                 "[ROUTER] Extracting table name for method={}, requestBytesSize={}",
                 methodName,
@@ -59,6 +61,7 @@ public class HBaseRequestRouter {
             lookupKey = methodName + "-" + tableName;
         }
 
+        System.err.println("[ROUTER] Routing decision: method=" + methodName + ", table=" + tableName + ", lookupKey=" + lookupKey + ", availableExecutors=" + executors.keySet());
         LOG.info(
                 "[ROUTER] Routing decision: method={}, table={}, lookupKey={}, availableExecutors={}",
                 methodName,
@@ -69,6 +72,7 @@ public class HBaseRequestRouter {
         HBaseOperationExecutor executor = executors.get(lookupKey);
 
         if (executor == null) {
+            System.err.println("[ROUTER] NO EXECUTOR FOUND for method: " + methodName + " (table: " + tableName + ", lookup key: " + lookupKey + ")");
             LOG.warn(
                     "[ROUTER] No executor found for method: {} (table: {}, lookup key: {})",
                     methodName,
@@ -81,11 +85,13 @@ public class HBaseRequestRouter {
                                     "Method not supported: " + methodName)));
         }
 
+        System.err.println("[ROUTER] Dispatching to executor: callId=" + request.getCallId() + ", executor=" + executor.getClass().getSimpleName());
         LOG.info(
                 "[ROUTER] Dispatching to executor: callId={}, executor={}",
                 request.getCallId(),
                 executor.getClass().getSimpleName());
         CompletableFuture<HBaseRpcResponse> future = executor.execute(request);
+        System.err.println("[ROUTER] Executor returned future: callId=" + request.getCallId() + ", futureIsDone=" + future.isDone());
         LOG.info(
                 "[ROUTER] Executor returned future: callId={}, futureIsDone={}",
                 request.getCallId(),

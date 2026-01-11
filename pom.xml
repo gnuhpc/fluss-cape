@@ -204,6 +204,13 @@
             <version>${netty.version}</version>
         </dependency>
 
+        <!-- Netty Redis codec for Redis protocol support -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-redis</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+
         <!-- Protobuf -->
         <dependency>
             <groupId>com.google.protobuf</groupId>

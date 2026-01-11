@@ -65,19 +65,24 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out)
             throws Exception {
+        System.err.println("[DECODER] *** DECODE CALLED: state=" + state + " readableBytes=" + in.readableBytes());
         switch (state) {
             case PREAMBLE:
                 if (decodePreamble(ctx, in)) {
+                    System.err.println("[DECODER] *** PREAMBLE DECODED, moving to CONNECTION_HEADER");
                     state = State.CONNECTION_HEADER;
                 }
                 break;
             case CONNECTION_HEADER:
                 if (decodeConnectionHeader(ctx, in)) {
+                    System.err.println("[DECODER] *** CONNECTION_HEADER DECODED, moving to RPC_REQUEST");
                     state = State.RPC_REQUEST;
                 }
                 break;
             case RPC_REQUEST:
+                System.err.println("[DECODER] *** DECODING RPC_REQUEST");
                 decodeRpcRequest(in, out);
+                System.err.println("[DECODER] *** RPC_REQUEST DECODED, out.size=" + out.size());
                 break;
         }
     }
@@ -286,7 +291,9 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
 
             HBaseRpcRequest request =
                     new HBaseRpcRequest(callId, methodName, requestParam, cellBlock);
+            System.err.println("[DECODER] *** CREATED HBaseRpcRequest: callId=" + callId + " method=" + methodName);
             out.add(request);
+            System.err.println("[DECODER] *** ADDED REQUEST TO OUT LIST");
 
         } finally {
             frameBuffer.release();
