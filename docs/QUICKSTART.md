@@ -11,6 +11,8 @@ A concise path to building Fluss CAPE, running the compatibility server, and try
 
 ## 2. Build the project
 
+### 2.1 Build JAR from source
+
 ```bash
 git clone https://github.com/gnuhpc/fluss-cape.git
 cd fluss-cape
@@ -20,9 +22,166 @@ mvn clean package -DskipTests
 
 > Tip: reuse the same Maven settings and local Fluss version as your target environment so that the generated `fluss-cape` jar and native config align with your cluster.
 
+### 2.2 Build Docker image
+
+```bash
+# Build the JAR first (required)
+mvn clean package -DskipTests
+
+# Build Docker image
+docker build -t fluss-cape:1.0.0 .
+
+# Verify the image
+docker images | grep fluss-cape
+```
+
+The Docker image includes:
+- Java 11 runtime (eclipse-temurin:11-jre-jammy)
+- fluss-cape.jar at `/app/fluss-cape.jar`
+- Pre-configured environment variables for all protocols
+- Health check endpoint at port 8080
+- Exposed ports: 16020 (HBase), 6379 (Redis), 5432 (PostgreSQL), 9092 (Kafka), 8080 (Health)
+
 ## 3. Start Fluss CAPE
 
-### 3.1 HBase + Redis + Kafka + PostgreSQL (full stack)
+You can run Fluss CAPE either via **Docker** (recommended for production) or directly via **JAR** (recommended for development).
+
+### 3.1 Run with Docker (Recommended)
+
+#### 3.1.1 Full stack (HBase + Redis + Kafka + PostgreSQL)
+
+```bash
+docker run -d \
+  --name fluss-cape \
+  --network host \
+  -e FLUSS_BOOTSTRAP=localhost:9123 \
+  -e ZK_QUORUM=localhost:2181 \
+  -e BIND_ADDRESS=0.0.0.0 \
+  -e BIND_PORT=16020 \
+  -e REDIS_ENABLE=true \
+  -e REDIS_BIND_PORT=6379 \
+  -e KAFKA_ENABLE=true \
+  -e KAFKA_BIND_PORT=9092 \
+  -e PG_ENABLE=true \
+  -e PG_BIND_PORT=5432 \
+  -e HEALTH_PORT=8080 \
+  fluss-cape:1.0.0
+
+# Check container logs
+docker logs -f fluss-cape
+
+# Verify health
+curl http://localhost:8080/health
+```
+
+#### 3.1.2 HBase + Redis only
+
+```bash
+docker run -d \
+  --name fluss-cape \
+  --network host \
+  -e FLUSS_BOOTSTRAP=localhost:9123 \
+  -e ZK_QUORUM=localhost:2181 \
+  -e REDIS_ENABLE=true \
+  -e KAFKA_ENABLE=false \
+  -e PG_ENABLE=false \
+  fluss-cape:1.0.0
+```
+
+#### 3.1.3 Custom ports (avoid conflicts)
+
+```bash
+docker run -d \
+  --name fluss-cape \
+  -p 16021:16021 \
+  -p 6380:6380 \
+  -p 5433:5433 \
+  -p 9093:9093 \
+  -p 8081:8081 \
+  -e FLUSS_BOOTSTRAP=localhost:9123 \
+  -e ZK_QUORUM=localhost:2181 \
+  -e BIND_PORT=16021 \
+  -e REDIS_BIND_PORT=6380 \
+  -e KAFKA_BIND_PORT=9093 \
+  -e PG_BIND_PORT=5433 \
+  -e HEALTH_PORT=8081 \
+  fluss-cape:1.0.0
+```
+
+#### 3.1.4 Update running Docker container
+
+When you rebuild the JAR and Docker image, update the running container:
+
+```bash
+# Method 1: Stop, remove, and run new container
+docker stop fluss-cape
+docker rm fluss-cape
+
+# Rebuild image with new code
+mvn clean package -DskipTests
+docker build -t fluss-cape:1.0.0 .
+
+# Run new container with same configuration
+docker run -d \
+  --name fluss-cape \
+  --network host \
+  -e FLUSS_BOOTSTRAP=localhost:9123 \
+  -e ZK_QUORUM=localhost:2181 \
+  fluss-cape:1.0.0
+
+# Method 2: One-liner update (force recreate)
+docker rm -f fluss-cape && \
+mvn clean package -DskipTests && \
+docker build -t fluss-cape:1.0.0 . && \
+docker run -d --name fluss-cape --network host \
+  -e FLUSS_BOOTSTRAP=localhost:9123 \
+  -e ZK_QUORUM=localhost:2181 \
+  fluss-cape:1.0.0
+
+# Method 3: Update with Docker Compose (if using docker-compose.yml)
+mvn clean package -DskipTests
+docker build -t fluss-cape:1.0.0 .
+docker-compose down
+docker-compose up -d
+```
+
+#### 3.1.5 Docker container management
+
+```bash
+# Stop container
+docker stop fluss-cape
+
+# Start container
+docker start fluss-cape
+
+# Restart container (reload configuration)
+docker restart fluss-cape
+
+# Remove container
+docker rm -f fluss-cape
+
+# View logs (live tail)
+docker logs -f fluss-cape
+
+# View recent logs (last 100 lines)
+docker logs --tail 100 fluss-cape
+
+# Execute command inside container
+docker exec -it fluss-cape sh
+
+# Check container status
+docker ps -a | grep fluss-cape
+
+# Inspect container configuration
+docker inspect fluss-cape
+
+# Check resource usage
+docker stats fluss-cape --no-stream
+```
+
+### 3.2 Run with JAR (Development)
+
+#### 3.2.1 HBase + Redis + Kafka + PostgreSQL (full stack)
 
 ```bash
 java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
@@ -41,7 +200,7 @@ java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
   --health.check.port=8080
 ```
 
-### 3.2 HBase-only (fast validation)
+#### 3.2.2 HBase-only (fast validation)
 
 ```bash
 java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
@@ -126,5 +285,83 @@ Kafka topics are backed by Fluss tables in the `default` database, so all produc
 ## 7. Next steps
 
 - Dive deeper with `docs/GETTING-STARTED.md` and the protocol-specific guides (`HBASE-GUIDE.md`, `REDIS-GUIDE.md`, `PGSQL-GUIDE.md`).
-- Use `docker` scripts in `/scripts` for containerized runs.
+- Run multi-instance deployment with Docker Compose: see `docker-compose.yml` for clustered setup examples.
 - Experiment with the `tests/run-tests.sh` suite once you are comfortable with manual flows.
+- Check out production deployment patterns in `docs/CONFIGURATION.md`.
+
+## 8. Docker configuration reference
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLUSS_BOOTSTRAP` | `localhost:9123` | Fluss bootstrap servers |
+| `ZK_QUORUM` | `localhost:2181` | ZooKeeper quorum for HBase discovery |
+| `BIND_ADDRESS` | `0.0.0.0` | HBase bind address |
+| `BIND_PORT` | `16020` | HBase RPC port |
+| `HEALTH_PORT` | `8080` | Health check HTTP port |
+| `REDIS_ENABLE` | `true` | Enable Redis protocol |
+| `REDIS_BIND_ADDRESS` | `0.0.0.0` | Redis bind address |
+| `REDIS_BIND_PORT` | `6379` | Redis protocol port |
+| `REDIS_SHARDING_ENABLED` | `true` | Enable Redis Cluster sharding |
+| `REDIS_SHARDING_NUM_SHARDS` | `16` | Number of shards for Redis |
+| `PG_ENABLE` | `true` | Enable PostgreSQL protocol |
+| `PG_BIND_ADDRESS` | `0.0.0.0` | PostgreSQL bind address |
+| `PG_BIND_PORT` | `5432` | PostgreSQL protocol port |
+| `PG_DATABASE` | `default` | Default PostgreSQL database |
+| `PG_AUTH_MODE` | `trust` | PostgreSQL auth mode (trust/password) |
+| `KAFKA_ENABLE` | `true` | Enable Kafka protocol |
+| `KAFKA_BIND_ADDRESS` | `0.0.0.0` | Kafka bind address |
+| `KAFKA_BIND_PORT` | `9092` | Kafka protocol port |
+| `KAFKA_DEFAULT_DATABASE` | `default` | Default Kafka database |
+| `SERVER_ID` | _(empty)_ | Unique server ID for multi-instance |
+| `TABLES` | _(empty)_ | Pre-configured HBase tables (comma-separated) |
+
+### Docker Compose Example
+
+For production multi-instance deployment:
+
+```yaml
+version: '3.8'
+services:
+  fluss-cape-1:
+    image: fluss-cape:1.0.0
+    container_name: fluss-cape-1
+    network_mode: host
+    environment:
+      FLUSS_BOOTSTRAP: localhost:9123
+      ZK_QUORUM: localhost:2181
+      SERVER_ID: cape-1
+      BIND_PORT: 16020
+      REDIS_BIND_PORT: 6379
+      KAFKA_BIND_PORT: 9092
+      PG_BIND_PORT: 5432
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  fluss-cape-2:
+    image: fluss-cape:1.0.0
+    container_name: fluss-cape-2
+    network_mode: host
+    environment:
+      FLUSS_BOOTSTRAP: localhost:9123
+      ZK_QUORUM: localhost:2181
+      SERVER_ID: cape-2
+      BIND_PORT: 16021
+      REDIS_BIND_PORT: 6380
+      KAFKA_BIND_PORT: 9093
+      PG_BIND_PORT: 5433
+      HEALTH_PORT: 8081
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+```
+
+Run with: `docker-compose up -d`
