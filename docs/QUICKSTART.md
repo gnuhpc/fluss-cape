@@ -35,7 +35,7 @@ docker build -t fluss-cape:1.0.0 .
 docker images | grep fluss-cape
 ```
 
-**Image includes**: Java 11 runtime, fluss-cape.jar, health check endpoint, all protocol ports exposed (16020, 6379, 5432, 9092, 8080)
+**Image includes**: Java 11 runtime, fluss-cape.jar, health check endpoint, all protocol ports exposed (16020, 6379, 5432, 9092, 8081)
 
 ---
 
@@ -53,11 +53,12 @@ docker run -d \
   --network host \
   -e FLUSS_BOOTSTRAP=localhost:9123 \
   -e ZK_QUORUM=localhost:2181 \
+  -e HEALTH_PORT=8081 \
   fluss-cape:1.0.0
 
 # Verify
 docker logs -f fluss-cape
-curl http://localhost:8080/health
+curl http://localhost:8081/health
 ```
 
 **Selective protocols**:
@@ -67,6 +68,7 @@ curl http://localhost:8080/health
 docker run -d --name fluss-cape --network host \
   -e FLUSS_BOOTSTRAP=localhost:9123 \
   -e ZK_QUORUM=localhost:2181 \
+  -e HEALTH_PORT=8081 \
   -e KAFKA_ENABLE=false \
   -e PG_ENABLE=false \
   fluss-cape:1.0.0
@@ -102,7 +104,7 @@ java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
   --kafka.bind.port=9092 \
   --pg.enabled=true \
   --pg.port=5432 \
-  --health.check.port=8080
+  --health.check.port=8081
 ```
 
 **HBase only** (minimal setup):
@@ -110,6 +112,7 @@ java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
 ```bash
 java -jar target/fluss-cape-1.0.0-SNAPSHOT.jar \
   --fluss.bootstrap.servers=localhost:9123 \
+  --health.check.port=8081 \
   --redis.enable=false \
   --kafka.enable=false \
   --pg.enabled=false
@@ -184,10 +187,10 @@ kafka-console-consumer.sh --bootstrap-server localhost:9092 \
 
 ```bash
 # CAPE health
-curl http://localhost:8080/health
+curl http://localhost:8081/health
 
 # Ports listening
-ss -tuln | grep -E "16020|6379|5432|9092|8080"
+ss -tuln | grep -E "16020|6379|5432|9092|8081"
 
 # Fluss cluster health
 curl http://localhost:9123/health
@@ -226,6 +229,7 @@ docker rm -f fluss-cape && \
   docker run -d --name fluss-cape --network host \
     -e FLUSS_BOOTSTRAP=localhost:9123 \
     -e ZK_QUORUM=localhost:2181 \
+    -e HEALTH_PORT=8081 \
     fluss-cape:1.0.0
 
 # Docker Compose (if using compose file)
@@ -247,7 +251,7 @@ mvn clean package -DskipTests
 
 | Issue | Solution |
 |-------|----------|
-| **Port conflicts** | Use custom ports (see section 3) or set env vars: `BIND_PORT`, `REDIS_BIND_PORT`, etc. |
+| **Port conflicts** | Use custom ports or set env vars: `HEALTH_PORT=8081`, `BIND_PORT=16021`, etc. Common conflict: port 8080 often used by ZooKeeper AdminServer |
 | **Redis errors** | Ensure Fluss tables exist for your key patterns |
 | **HBase client fails** | Verify ZooKeeper is reachable (`localhost:2181`) and CAPE registered as RegionServer |
 | **Kafka client errors** | Check logs for `KafkaCompatServer` startup messages |
@@ -282,8 +286,9 @@ services:
       REDIS_BIND_PORT: 6379
       KAFKA_BIND_PORT: 9092
       PG_BIND_PORT: 5432
+      HEALTH_PORT: 8081
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -301,9 +306,9 @@ services:
       REDIS_BIND_PORT: 6380
       KAFKA_BIND_PORT: 9093
       PG_BIND_PORT: 5433
-      HEALTH_PORT: 8081
+      HEALTH_PORT: 8082
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -330,7 +335,7 @@ docker-compose logs -f
 | `ZK_QUORUM` | `localhost:2181` | ZooKeeper quorum (HBase discovery) |
 | `BIND_ADDRESS` | `0.0.0.0` | HBase bind address |
 | `BIND_PORT` | `16020` | HBase RPC port |
-| `HEALTH_PORT` | `8080` | Health check HTTP port |
+| `HEALTH_PORT` | `8081` | Health check HTTP port (changed from 8080 to avoid ZooKeeper AdminServer conflict) |
 | `REDIS_ENABLE` | `true` | Enable Redis protocol |
 | `REDIS_BIND_ADDRESS` | `0.0.0.0` | Redis bind address |
 | `REDIS_BIND_PORT` | `6379` | Redis port |
@@ -353,6 +358,7 @@ docker-compose logs -f
 Prefix each variable with `--` and use dots:
 - `--fluss.bootstrap.servers=localhost:9123`
 - `--hbase.compat.bind.port=16020`
+- `--health.check.port=8081`
 - `--redis.enable=true`
 - `--kafka.bind.port=9092`
 - `--pg.enabled=true`

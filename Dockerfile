@@ -20,15 +20,15 @@ COPY target/fluss-cape-1.0.0-SNAPSHOT.jar /app/fluss-cape.jar
 # 6379 - Redis port
 # 5432 - PostgreSQL port
 # 9092 - Kafka port
-# 8080 - Health check HTTP port
-EXPOSE 16020 6379 5432 9092 8080
+# 8081 - Health check HTTP port (default changed from 8080 to avoid ZooKeeper AdminServer conflict)
+EXPOSE 16020 6379 5432 9092 8081
 
 # Set default environment variables
 ENV FLUSS_BOOTSTRAP="localhost:9123"
 ENV ZK_QUORUM="localhost:2181"
 ENV BIND_ADDRESS="0.0.0.0"
 ENV BIND_PORT="16020"
-ENV HEALTH_PORT="8080"
+ENV HEALTH_PORT="8081"
 ENV TABLES=""
 ENV SERVER_ID=""
 ENV REDIS_ENABLE="true"
