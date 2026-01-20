@@ -46,6 +46,8 @@ MULTI_HBASE_PORTS=("16020" "16021" "16022")
 # ==============================================================================
 # Timeout for individual test commands (seconds)
 TEST_TIMEOUT=30
+HBASE_SCAN_MAX_WAIT_SECONDS=60
+HBASE_SCAN_RETRY_INTERVAL=5
 
 # Number of iterations for load tests (if applicable)
 TEST_ITERATIONS=10

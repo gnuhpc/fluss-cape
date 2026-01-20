@@ -1,6 +1,6 @@
 services:
   hbase-compat-1:
-    image: fluss-hbase-compat:1.0.0
+    image: fluss-cape:1.0.0
     container_name: hbase-compat-1
     network_mode: host
     environment:
@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   hbase-compat-2:
-    image: fluss-hbase-compat:1.0.0
+    image: fluss-cape:1.0.0
     container_name: hbase-compat-2
     network_mode: host
     environment:
@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
 
   hbase-compat-3:
-    image: fluss-hbase-compat:1.0.0
+    image: fluss-cape:1.0.0
     container_name: hbase-compat-3
     network_mode: host
     environment:

@@ -2,7 +2,7 @@
 
 set -e
 
-PIDS_FILE="/tmp/hbase-compat-cluster.pids"
+PIDS_FILE="/tmp/fluss-cape-cluster.pids"
 
 if [ ! -f "${PIDS_FILE}" ]; then
     echo "No cluster PIDs file found at ${PIDS_FILE}"
@@ -11,7 +11,8 @@ if [ ! -f "${PIDS_FILE}" ]; then
     exit 0
 fi
 
-echo "========================================" echo "Stopping HBase Compatibility Cluster"
+echo "========================================"
+echo "Stopping Fluss CAPE Cluster"
 echo "========================================"
 
 while read PID; do

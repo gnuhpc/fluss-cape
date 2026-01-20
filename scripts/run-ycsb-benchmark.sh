@@ -70,9 +70,9 @@ echo ""
 echo "Step 2: Building HBase Compatibility Layer..."
 cd "${FLUSS_HOME}"
 
-if [ ! -f "fluss-hbase-compat/target/fluss-hbase-compat-0.9-SNAPSHOT.jar" ]; then
+if [ ! -f "fluss-cape/target/fluss-cape-0.9-SNAPSHOT.jar" ]; then
     print_warning "JAR not found. Building from source..."
-    mvn clean install -pl fluss-hbase-compat -DskipTests
+    mvn clean install -pl fluss-cape -DskipTests
     print_status "Build complete"
 else
     print_status "JAR already exists"
@@ -197,8 +197,8 @@ fi
 echo ""
 echo "Step 7: Starting HBase Compatibility Server..."
 
-HBASE_COMPAT_JAR="${FLUSS_HOME}/fluss-hbase-compat/target/fluss-hbase-compat-0.9-SNAPSHOT.jar"
-HBASE_COMPAT_LOG="${FLUSS_HOME}/fluss-hbase-compat/hbase-compat-server.log"
+HBASE_COMPAT_JAR="${FLUSS_HOME}/fluss-cape/target/fluss-cape-0.9-SNAPSHOT.jar"
+HBASE_COMPAT_LOG="${FLUSS_HOME}/fluss-cape/hbase-compat-server.log"
 
 # Check if already running
 if pgrep -f "HBaseCompatServerLauncher" > /dev/null; then
@@ -243,7 +243,7 @@ print_status "Loading ${RECORD_COUNT} records with ${THREAD_COUNT} threads..."
     -p columnfamily=cf \
     -p recordcount="${RECORD_COUNT}" \
     -p threadcount="${THREAD_COUNT}" \
-    -s | tee "${FLUSS_HOME}/fluss-hbase-compat/ycsb-load-results.txt"
+    -s | tee "${FLUSS_HOME}/fluss-cape/ycsb-load-results.txt"
 
 print_status "Load phase complete"
 
@@ -266,7 +266,7 @@ run_workload() {
         -p columnfamily=cf \
         -p operationcount="${OPERATION_COUNT}" \
         -p threadcount="${THREAD_COUNT}" \
-        -s | tee "${FLUSS_HOME}/fluss-hbase-compat/ycsb-workload${workload}-results.txt"
+        -s | tee "${FLUSS_HOME}/fluss-cape/ycsb-workload${workload}-results.txt"
     
     print_status "Workload ${workload} complete"
 }
@@ -279,7 +279,7 @@ run_workload "c" "100% reads (Read only)"
 echo ""
 echo "Step 10: Generating benchmark summary..."
 
-REPORT_FILE="${FLUSS_HOME}/fluss-hbase-compat/benchmark-summary.txt"
+REPORT_FILE="${FLUSS_HOME}/fluss-cape/benchmark-summary.txt"
 
 cat > "${REPORT_FILE}" <<EOF
 ========================================
@@ -298,22 +298,22 @@ EOF
 
 echo "" >> "${REPORT_FILE}"
 echo "Throughput:" >> "${REPORT_FILE}"
-grep "Throughput" "${FLUSS_HOME}/fluss-hbase-compat/ycsb-load-results.txt" >> "${REPORT_FILE}"
+grep "Throughput" "${FLUSS_HOME}/fluss-cape/ycsb-load-results.txt" >> "${REPORT_FILE}"
 
 echo "" >> "${REPORT_FILE}"
 echo "Workload A (50% read, 50% update):" >> "${REPORT_FILE}"
 grep -E "Throughput|INSERT.*AverageLatency|UPDATE.*AverageLatency|READ.*AverageLatency" \
-    "${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloada-results.txt" >> "${REPORT_FILE}"
+    "${FLUSS_HOME}/fluss-cape/ycsb-workloada-results.txt" >> "${REPORT_FILE}"
 
 echo "" >> "${REPORT_FILE}"
 echo "Workload B (95% read, 5% update):" >> "${REPORT_FILE}"
 grep -E "Throughput|INSERT.*AverageLatency|UPDATE.*AverageLatency|READ.*AverageLatency" \
-    "${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloadb-results.txt" >> "${REPORT_FILE}"
+    "${FLUSS_HOME}/fluss-cape/ycsb-workloadb-results.txt" >> "${REPORT_FILE}"
 
 echo "" >> "${REPORT_FILE}"
 echo "Workload C (100% read):" >> "${REPORT_FILE}"
 grep -E "Throughput|READ.*AverageLatency" \
-    "${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloadc-results.txt" >> "${REPORT_FILE}"
+    "${FLUSS_HOME}/fluss-cape/ycsb-workloadc-results.txt" >> "${REPORT_FILE}"
 
 cat "${REPORT_FILE}"
 
@@ -334,9 +334,9 @@ echo "Benchmark Complete!"
 echo "=========================================="
 echo ""
 print_status "Results saved to:"
-echo "  - Load: ${FLUSS_HOME}/fluss-hbase-compat/ycsb-load-results.txt"
-echo "  - Workload A: ${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloada-results.txt"
-echo "  - Workload B: ${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloadb-results.txt"
-echo "  - Workload C: ${FLUSS_HOME}/fluss-hbase-compat/ycsb-workloadc-results.txt"
+echo "  - Load: ${FLUSS_HOME}/fluss-cape/ycsb-load-results.txt"
+echo "  - Workload A: ${FLUSS_HOME}/fluss-cape/ycsb-workloada-results.txt"
+echo "  - Workload B: ${FLUSS_HOME}/fluss-cape/ycsb-workloadb-results.txt"
+echo "  - Workload C: ${FLUSS_HOME}/fluss-cape/ycsb-workloadc-results.txt"
 echo "  - Summary: ${REPORT_FILE}"
 echo ""

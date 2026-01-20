@@ -36,6 +36,12 @@ Fluss CAPE is an external compatibility layer that enables applications to inter
 - **Client Compatible**: Works with redis-cli, Python, Node.js, Java, and all standard Redis clients
 - **Persistent Storage**: All data durably stored in Fluss
 
+### PostgreSQL Compatibility
+- **Wire Protocol Support**: Connect using any standard PostgreSQL client (psql, DBeaver, etc.)
+- **SQL Interface**: Query Fluss tables using standard SQL syntax
+- **Hybrid Scan Strategy**: Reliable data retrieval combining snapshots and changelogs
+- **Information Schema**: Full support for metadata discovery and database introspection
+
 ---
 
 ## ⚠️ Important Notes
@@ -144,6 +150,7 @@ OK
 - **[Getting Started](docs/GETTING-STARTED.md)** - Detailed installation and setup guide
 - **[HBase Guide](docs/HBASE-GUIDE.md)** - Complete HBase usage with examples
 - **[Redis Guide](docs/REDIS-GUIDE.md)** - Redis commands and client examples
+- **[PostgreSQL Guide](docs/PGSQL-GUIDE.md)** - PostgreSQL wire protocol usage and SQL examples
 - **[Configuration](docs/CONFIGURATION.md)** - All configuration parameters
 - **[Performance Benchmarks](docs/BENCHMARKS.md)** - YCSB benchmarks and tuning
 - **[Functional Tests](tests/README.md)** - Automated testing suite for single and multi-instance deployments

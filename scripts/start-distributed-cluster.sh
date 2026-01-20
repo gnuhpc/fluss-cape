@@ -12,7 +12,7 @@ BASE_PORT="${BASE_PORT:-16020}"
 HEALTH_CHECK_BASE_PORT="${HEALTH_CHECK_BASE_PORT:-8080}"
 
 echo "========================================"
-echo "Starting HBase Compatibility Cluster"
+echo "Starting Fluss CAPE Cluster"
 echo "========================================"
 echo "Number of servers: ${NUM_SERVERS}"
 echo "Base port: ${BASE_PORT}"
@@ -22,7 +22,7 @@ echo "ZooKeeper: ${ZK_QUORUM}"
 echo "Tables: ${TABLES}"
 echo "========================================"
 
-CLASSPATH="${FLUSS_HOME}/fluss-hbase-compat/target/fluss-hbase-compat-0.9-SNAPSHOT.jar"
+CLASSPATH="${FLUSS_HOME}/fluss-cape/target/fluss-cape-0.9-SNAPSHOT.jar"
 CLASSPATH="${CLASSPATH}:${FLUSS_HOME}/fluss-client/target/fluss-client-0.9-SNAPSHOT.jar"
 CLASSPATH="${CLASSPATH}:${FLUSS_HOME}/fluss-common/target/fluss-common-0.9-SNAPSHOT.jar"
 CLASSPATH="${CLASSPATH}:${FLUSS_HOME}/fluss-rpc/target/fluss-rpc-0.9-SNAPSHOT.jar"
@@ -34,13 +34,13 @@ for jar in ${SCRIPT_DIR}/hbase-2.5.13-client/lib/*.jar; do
     CLASSPATH="${CLASSPATH}:${jar}"
 done
 
-PIDS_FILE="/tmp/hbase-compat-cluster.pids"
+PIDS_FILE="/tmp/fluss-cape-cluster.pids"
 > "${PIDS_FILE}"
 
 for i in $(seq 1 ${NUM_SERVERS}); do
     PORT=$((BASE_PORT + i - 1))
     HEALTH_PORT=$((HEALTH_CHECK_BASE_PORT + i - 1))
-    LOG_FILE="/tmp/hbase-compat-server-${i}.log"
+    LOG_FILE="/tmp/fluss-cape-server-${i}.log"
     
     echo "Starting server ${i} on port ${PORT} (health check: ${HEALTH_PORT})..."
     
@@ -53,7 +53,7 @@ for i in $(seq 1 ${NUM_SERVERS}); do
         -Dserver.id="server-${i}" \
         -Dhealth.check.port="${HEALTH_PORT}" \
         -cp "${CLASSPATH}" \
-        org.apache.fluss.hbase.server.HBaseCompatServerLauncher \
+        org.gnuhpc.fluss.cape.hbase.server.HBaseCompatServerLauncher \
         > "${LOG_FILE}" 2>&1 &
     
     PID=$!

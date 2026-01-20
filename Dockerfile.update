@@ -1,4 +1,0 @@
-FROM fluss-hbase-compat:1.0.0
-
-# Replace the JAR with updated version
-COPY target/fluss-hbase-compat-1.0.0-SNAPSHOT.jar /app/fluss-hbase-compat.jar

@@ -45,4 +45,17 @@ logs/
 
 # Test outputs
 /test-output/
+tests/test-reports/*.log
 *.pid
+
+# OpenCode / AI coding assistant files
+.opencode/
+.omo/
+omo-*.log
+.sisyphus/
+.cursor/
+.cursorrules
+.copilot/
+.github/copilot-instructions.md
+ai-todo.md
+AI_TODO.md

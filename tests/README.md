@@ -139,6 +139,8 @@ TEST_ITERATIONS=10
 - Limited scans
 - Row counting
 
+> **⚠️ Scan not supported:** CAPE does not support HBase Scan. Scan tests are skipped/expected to fail; rely on Get/Put for verification.
+
 #### Delete Operations
 - Column deletion
 - Row deletion (`deleteall`)
@@ -278,6 +280,10 @@ If specific tests fail:
    ```bash
    cat test-reports/test_report_*.log
    ```
+
+### HBase Scan Unsupported
+
+CAPE currently does **not** support HBase Scan. Scan-related tests are disabled; use Get/Put only.
 
 ### Multi-Instance Issues
 

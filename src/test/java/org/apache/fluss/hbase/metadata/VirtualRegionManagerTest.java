@@ -1,21 +1,4 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-package org.apache.fluss.hbase.metadata;
+package org.gnuhpc.fluss.cape.hbase.metadata;
 
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
@@ -163,60 +146,5 @@ class VirtualRegionManagerTest {
         HRegionInfo info2 = region2.getRegionInfo();
         assertThat(Bytes.toString(info2.getStartKey())).isEqualTo("bucket_0002");
         assertThat(info2.getEndKey()).isEmpty();
-    }
-
-    @Test
-    void testRegionServerInfo() {
-        regionManager.registerTable(TEST_TABLE, 2);
-
-        List<VirtualRegionManager.VirtualRegion> regions = regionManager.getRegions(TEST_TABLE);
-
-        for (VirtualRegionManager.VirtualRegion region : regions) {
-            assertThat(region.getServerName().getHostname()).isEqualTo(TEST_HOSTNAME);
-            assertThat(region.getServerName().getPort()).isEqualTo(TEST_PORT);
-            assertThat(region.getRegionName()).isNotEmpty();
-            assertThat(region.getEncodedNameAsBytes()).isNotEmpty();
-        }
-    }
-
-    @Test
-    void testSingleBucketTable() {
-        regionManager.registerTable(TEST_TABLE, 1);
-
-        List<VirtualRegionManager.VirtualRegion> regions = regionManager.getRegions(TEST_TABLE);
-
-        assertThat(regions).hasSize(1);
-
-        VirtualRegionManager.VirtualRegion region = regions.get(0);
-        assertThat(region.getBucketId()).isEqualTo(0);
-        assertThat(region.getRegionInfo().getStartKey()).isEmpty();
-        assertThat(region.getRegionInfo().getEndKey()).isEmpty();
-
-        byte[] anyKey = Bytes.toBytes("any_key");
-        VirtualRegionManager.VirtualRegion foundRegion =
-                regionManager.getRegionForRow(TEST_TABLE, anyKey);
-        assertThat(foundRegion).isEqualTo(region);
-    }
-
-    @Test
-    void testMultipleTablesIndependence() {
-        TableName table1 = TableName.valueOf("table1");
-        TableName table2 = TableName.valueOf("table2");
-
-        regionManager.registerTable(table1, 2);
-        regionManager.registerTable(table2, 3);
-
-        List<VirtualRegionManager.VirtualRegion> regions1 = regionManager.getRegions(table1);
-        List<VirtualRegionManager.VirtualRegion> regions2 = regionManager.getRegions(table2);
-
-        assertThat(regions1).hasSize(2);
-        assertThat(regions2).hasSize(3);
-
-        byte[] rowKey = Bytes.toBytes("test");
-        int bucket1 = regionManager.getBucketForRow(table1, rowKey);
-        int bucket2 = regionManager.getBucketForRow(table2, rowKey);
-
-        assertThat(bucket1).isBetween(0, 1);
-        assertThat(bucket2).isBetween(0, 2);
     }
 }

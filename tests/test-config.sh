@@ -14,7 +14,7 @@ HBASE_CLI="${HBASE_CLI:-/root/hbase-2.5.13-client/bin/hbase}"
 SINGLE_INSTANCE_MODE="single"
 SINGLE_REDIS_HOST="localhost"
 SINGLE_REDIS_PORT="6379"
-SINGLE_HBASE_ZK_QUORUM="localhost:2181"
+SINGLE_HBASE_ZK_QUORUM="192.168.50.101:2181,192.168.50.102:2181,192.168.50.103:2181"
 SINGLE_HBASE_PORT="16020"
 
 # ==============================================================================
@@ -28,7 +28,7 @@ MULTI_REDIS_LB_PORT="6379"  # HAProxy load balancer port
 MULTI_REDIS_BACKEND_PORTS=("6390" "6391")  # Backend CAPE instance ports
 
 # HBase multi-instance configuration (direct connection to each instance)
-MULTI_HBASE_ZK_QUORUM="localhost:2181,localhost:2182,localhost:2183"
+MULTI_HBASE_ZK_QUORUM="192.168.50.101:2181,192.168.50.102:2181,192.168.50.103:2181"
 MULTI_HBASE_PORTS=("16020" "16021" "16022")  # Each CAPE instance port
 
 # ==============================================================================
@@ -36,6 +36,16 @@ MULTI_HBASE_PORTS=("16020" "16021" "16022")  # Each CAPE instance port
 # ==============================================================================
 # Test timeout in seconds
 TEST_TIMEOUT=30
+HBASE_SCAN_MAX_WAIT_SECONDS=${HBASE_SCAN_MAX_WAIT_SECONDS:-60}
+HBASE_SCAN_RETRY_INTERVAL=${HBASE_SCAN_RETRY_INTERVAL:-5}
+
+# Fluss snapshot configuration
+# HBase scan operations require KV snapshots to exist. Fluss generates snapshots
+# at intervals configured by 'kv.snapshot.interval' (default: 5 minutes).
+# For testing, this should match the Fluss cluster configuration (typically 3s in docker-compose).
+# The buffer adds extra time to ensure snapshot generation completes.
+FLUSS_SNAPSHOT_INTERVAL_SECONDS=${FLUSS_SNAPSHOT_INTERVAL_SECONDS:-3}
+SNAPSHOT_WAIT_BUFFER_SECONDS=${SNAPSHOT_WAIT_BUFFER_SECONDS:-5}
 
 # Number of test iterations
 TEST_ITERATIONS=10
@@ -92,9 +102,34 @@ print_test_result() {
         print_msg "$COLOR_RED" "[FAIL] $test_name: $message"
     elif [ "$status" = "WARN" ]; then
         print_msg "$COLOR_YELLOW" "[WARN] $test_name: $message"
+    elif [ "$status" = "SKIP" ]; then
+        print_msg "$COLOR_MAGENTA" "[SKIP] $test_name: $message"
     else
         print_msg "$COLOR_BLUE" "[INFO] $test_name: $message"
     fi
+}
+
+# Check and setup JAVA_HOME
+setup_java_home() {
+    if [ -n "$JAVA_HOME" ] && [ -d "$JAVA_HOME" ]; then
+        return 0
+    fi
+    
+    local java_path=$(command -v java 2>/dev/null)
+    if [ -z "$java_path" ]; then
+        print_msg "$COLOR_RED" "Error: Java not found in PATH"
+        return 1
+    fi
+    
+    local java_home=$(readlink -f "$java_path" | sed 's|/bin/java||')
+    if [ -d "$java_home" ]; then
+        export JAVA_HOME="$java_home"
+        print_msg "$COLOR_GREEN" "✓ Auto-detected JAVA_HOME: $JAVA_HOME"
+        return 0
+    fi
+    
+    print_msg "$COLOR_RED" "Error: Could not determine JAVA_HOME"
+    return 1
 }
 
 # Check if command exists
@@ -164,10 +199,20 @@ generate_test_summary() {
     fi
 }
 
+wait_for_snapshot_generation() {
+    local table_name=$1
+    local wait_seconds=$((FLUSS_SNAPSHOT_INTERVAL_SECONDS + SNAPSHOT_WAIT_BUFFER_SECONDS))
+    
+    print_msg "$COLOR_YELLOW" "Waiting ${wait_seconds}s for Fluss snapshot generation (interval: ${FLUSS_SNAPSHOT_INTERVAL_SECONDS}s)..."
+    sleep "$wait_seconds"
+}
+
 # Export functions for use in test scripts
 export -f print_msg
 export -f print_test_header
 export -f print_test_result
 export -f check_command
+export -f setup_java_home
 export -f wait_for_service
+export -f wait_for_snapshot_generation
 export -f log_test_result
