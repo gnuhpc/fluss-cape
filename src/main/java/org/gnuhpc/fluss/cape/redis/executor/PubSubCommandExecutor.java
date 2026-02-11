@@ -41,6 +41,10 @@ public class PubSubCommandExecutor implements RedisCommandExecutor {
         this.pubSubManager = pubSubManager;
     }
 
+    public PubSubManager getPubSubManager() {
+        return pubSubManager;
+    }
+
     @Override
     public RedisMessage execute(RedisCommand command) {
         String cmd = command.getCommand();

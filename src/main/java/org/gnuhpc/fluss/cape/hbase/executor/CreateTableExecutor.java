@@ -59,7 +59,7 @@ public class CreateTableExecutor implements HBaseOperationExecutor {
      * Callback interface for registering CRUD executors after table creation.
      */
     public interface TableRegistrationCallback {
-        void registerTableExecutors(TablePath tablePath) throws Exception;
+        CompletableFuture<Void> registerTableExecutors(TablePath tablePath);
     }
 
     public CreateTableExecutor(
@@ -116,27 +116,61 @@ public class CreateTableExecutor implements HBaseOperationExecutor {
                                 LOG.info(
                                         "[CreateTable] Creating Fluss table: {}",
                                         tablePath);
-                                return flussAdmin.createTable(tablePath, flussTableDescriptor, false);
-                            })
-                    .thenCompose(
-                            v -> {
-                                // Register CRUD executors for this table
-                                LOG.info(
-                                        "[CreateTable] Registering CRUD executors for table: {}",
-                                        tablePath);
-                                try {
-                                    registrationCallback.registerTableExecutors(tablePath);
-                                    return CompletableFuture.completedFuture(null);
-                                } catch (Exception e) {
-                                    LOG.error(
-                                            "[CreateTable] Failed to register executors for table: {}",
-                                            tablePath,
-                                            e);
-                                    return CompletableFuture.failedFuture(e);
-                                }
+                                // Track whether table already exists using CompletableFuture wrapper
+                                CompletableFuture<Boolean> tableExistsTracker = new CompletableFuture<>();
+                                
+                                return flussAdmin.createTable(tablePath, flussTableDescriptor, false)
+                                        .handle((result, ex) -> {
+                                            if (ex != null) {
+                                                Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                                                String exClassName = cause.getClass().getName();
+                                                if (exClassName.contains("TableAlreadyExistException") || 
+                                                    (cause.getMessage() != null && cause.getMessage().contains("already exists"))) {
+                                                    LOG.info(
+                                                            "[CreateTable] Table {} already exists in Fluss, will register executors anyway",
+                                                            tablePath);
+                                                    tableExistsTracker.complete(true);  // Mark as already existed
+                                                    return null;  // Continue to executor registration
+                                                }
+                                                // Re-throw other exceptions
+                                                tableExistsTracker.completeExceptionally(ex);
+                                                throw (RuntimeException) ex;
+                                            }
+                                            tableExistsTracker.complete(false);  // Newly created
+                                            return result;
+                                        })
+                                        .thenCompose(createResult -> {
+                                            // Register CRUD executors for this table
+                                            LOG.info(
+                                                    "[CreateTable] Registering CRUD executors for table: {}",
+                                                    tablePath);
+                                            return registrationCallback.registerTableExecutors(tablePath)
+                                                    .whenComplete((regResult, throwable) -> {
+                                                        if (throwable != null) {
+                                                            LOG.error(
+                                                                    "[CreateTable] Failed to register executors for table: {}",
+                                                                    tablePath,
+                                                                    throwable);
+                                                        } else {
+                                                            LOG.info(
+                                                                    "[CreateTable] Successfully registered executors for table: {}",
+                                                                    tablePath);
+                                                        }
+                                                    })
+                                                    .thenCombine(tableExistsTracker, (regResult, alreadyExists) -> alreadyExists);
+                                        });
                             })
                     .thenApply(
-                            v -> {
+                            alreadyExists -> {
+                                if (alreadyExists) {
+                                    // Table already existed - return error to user
+                                    LOG.warn(
+                                            "[CreateTable] Table {}.{} already exists, returning error to client",
+                                            namespace,
+                                            qualifier);
+                                    throw new RuntimeException(
+                                            String.format("Table %s.%s already exists", namespace, qualifier));
+                                }
                                 // Return success response with dummy proc_id
                                 MasterProtos.CreateTableResponse response =
                                         MasterProtos.CreateTableResponse.newBuilder()

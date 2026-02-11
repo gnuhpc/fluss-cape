@@ -44,7 +44,17 @@ public interface RedisStorageAdapter {
 
     long incr(byte[] key) throws Exception;
 
+    long decr(byte[] key) throws Exception;
+
     long incrBy(byte[] key, long increment) throws Exception;
+
+    long decrBy(byte[] key, long decrement) throws Exception;
+
+    double incrByFloat(byte[] key, double increment) throws Exception;
+
+    long hincrBy(String redisKey, String field, long increment) throws Exception;
+
+    double zincrBy(String redisKey, String member, double increment) throws Exception;
 
     void close();
 

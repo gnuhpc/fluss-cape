@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.expiration.ExpirationManager;
 import org.gnuhpc.fluss.cape.redis.protocol.RedisCommand;
@@ -170,7 +171,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> results = new ArrayList<>();
         for (RedisSingleTableAdapter.KeyValue kv : kvList) {
-            results.add(kv.subKey.getBytes());
+            results.add(kv.subKey.getBytes(StandardCharsets.UTF_8));
         }
 
         return RedisResponse.bytesArray(results);
@@ -244,7 +245,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> results = new ArrayList<>();
         for (String member : result) {
-            results.add(member.getBytes());
+            results.add(member.getBytes(StandardCharsets.UTF_8));
         }
 
         return RedisResponse.bytesArray(results);
@@ -327,7 +328,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
         List<byte[]> results = new ArrayList<>();
         if (result != null) {
             for (String member : result) {
-                results.add(member.getBytes());
+                results.add(member.getBytes(StandardCharsets.UTF_8));
             }
         }
 
@@ -447,7 +448,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> results = new ArrayList<>();
         for (String member : result) {
-            results.add(member.getBytes());
+            results.add(member.getBytes(StandardCharsets.UTF_8));
         }
 
         return RedisResponse.bytesArray(results);
@@ -521,7 +522,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
         for (int i = 0; i < count; i++) {
             int index = random.nextInt(kvList.size());
             RedisSingleTableAdapter.KeyValue kv = kvList.remove(index);
-            results.add(kv.subKey.getBytes());
+            results.add(kv.subKey.getBytes(StandardCharsets.UTF_8));
             adapter.deleteByCompositeKey(key, kv.subKey);
         }
 
@@ -567,12 +568,12 @@ public class SetCommandExecutor implements RedisCommandExecutor {
 
         if (count == 1) {
             RedisSingleTableAdapter.KeyValue randomKv = kvList.get(random.nextInt(kvList.size()));
-            return RedisResponse.bulkString(randomKv.subKey.getBytes());
+            return RedisResponse.bulkString(randomKv.subKey.getBytes(StandardCharsets.UTF_8));
         } else {
             int absCount = Math.abs(count);
             for (int i = 0; i < absCount; i++) {
                 RedisSingleTableAdapter.KeyValue randomKv = kvList.get(random.nextInt(kvList.size()));
-                results.add(randomKv.subKey.getBytes());
+                results.add(randomKv.subKey.getBytes(StandardCharsets.UTF_8));
             }
             return RedisResponse.bytesArray(results);
         }
@@ -594,7 +595,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
         // Check expiration
         if (expirationManager.checkAndDeleteIfExpired(key)) {
             List<RedisMessage> result = new ArrayList<>();
-            result.add(RedisResponse.bulkString("0".getBytes()));
+            result.add(RedisResponse.bulkString("0".getBytes(StandardCharsets.UTF_8)));
             result.add(RedisResponse.bytesArray(Collections.emptyList()));
             return RedisResponse.array(result);
         }
@@ -608,7 +609,7 @@ public class SetCommandExecutor implements RedisCommandExecutor {
 
         if (existingType == null) {
             List<RedisMessage> result = new ArrayList<>();
-            result.add(RedisResponse.bulkString("0".getBytes()));
+            result.add(RedisResponse.bulkString("0".getBytes(StandardCharsets.UTF_8)));
             result.add(RedisResponse.bytesArray(Collections.emptyList()));
             return RedisResponse.array(result);
         }
@@ -639,11 +640,11 @@ public class SetCommandExecutor implements RedisCommandExecutor {
         // Build response: [nextCursor, [member1, member2, ...]]
         List<byte[]> memberBytes = new ArrayList<>();
         for (String member : scanResult.items) {
-            memberBytes.add(member.getBytes());
+            memberBytes.add(member.getBytes(StandardCharsets.UTF_8));
         }
 
         List<RedisMessage> result = new ArrayList<>();
-        result.add(RedisResponse.bulkString(String.valueOf(scanResult.nextCursor).getBytes()));
+        result.add(RedisResponse.bulkString(String.valueOf(scanResult.nextCursor).getBytes(StandardCharsets.UTF_8)));
         result.add(RedisResponse.bytesArray(memberBytes));
 
         return RedisResponse.array(result);

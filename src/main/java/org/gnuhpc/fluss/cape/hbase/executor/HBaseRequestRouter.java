@@ -65,6 +65,8 @@ public class HBaseRequestRouter {
             ((PutExecutor) executor).close();
         } else if (executor instanceof ScanExecutor) {
             ((ScanExecutor) executor).close();
+        } else if (executor instanceof ScanExecutorStreaming) {
+            ((ScanExecutorStreaming) executor).close();
         } else if (executor instanceof MultiExecutor) {
             ((MultiExecutor) executor).close();
         } else if (executor instanceof CheckAndMutateExecutor) {

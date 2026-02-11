@@ -59,6 +59,9 @@ public class KafkaRequestHandler {
     private final OffsetFetchHandler offsetFetchHandler;
     private final InitProducerIdHandler initProducerIdHandler;
     private final FindCoordinatorHandler findCoordinatorHandler;
+    private final CreateTopicsHandler createTopicsHandler;
+    private final DeleteTopicsHandler deleteTopicsHandler;
+    private final LeaveGroupHandler leaveGroupHandler;
 
     public KafkaRequestHandler(Connection flussConnection, KafkaCompatConfig config) {
         this.flussConnection = flussConnection;
@@ -88,7 +91,8 @@ public class KafkaRequestHandler {
             }
         );
         
-        this.consumerGroupCoordinator = new ConsumerGroupCoordinatorV2(flussConnection);
+        this.consumerGroupCoordinator =
+                new ConsumerGroupCoordinatorV2(flussConnection, config.getDefaultDatabase());
         
         this.consumerGroupCoordinator.getInitializationFuture()
             .thenRun(() -> LOG.info("Consumer group coordinator fully initialized"))
@@ -108,6 +112,9 @@ public class KafkaRequestHandler {
         this.offsetFetchHandler = new OffsetFetchHandler(consumerGroupCoordinator);
         this.initProducerIdHandler = new InitProducerIdHandler();
         this.findCoordinatorHandler = new FindCoordinatorHandler(config);
+        this.createTopicsHandler = new CreateTopicsHandler(flussConnection, config, tablePathResolver);
+        this.deleteTopicsHandler = new DeleteTopicsHandler(flussConnection, config, tablePathResolver);
+        this.leaveGroupHandler = new LeaveGroupHandler(consumerGroupCoordinator);
         
         LOG.info("Initialized KafkaRequestHandler with ScannerPool(size=100), WriterPool(size=50), and ConsumerGroupCoordinator");
     }
@@ -154,6 +161,19 @@ public class KafkaRequestHandler {
                 case FIND_COORDINATOR:
                     findCoordinatorHandler.handle(request);
                     break;
+                case LEAVE_GROUP:
+                    leaveGroupHandler.handle(request);
+                    break;
+                case GET_TELEMETRY_SUBSCRIPTIONS:
+                case PUSH_TELEMETRY:
+                    handleTelemetryRequest(request);
+                    break;
+                case CREATE_TOPICS:
+                    createTopicsHandler.handle(request);
+                    break;
+                case DELETE_TOPICS:
+                    deleteTopicsHandler.handle(request);
+                    break;
                 default:
                     LOG.warn("Unsupported API key: {}", request.apiKey());
                     handleUnsupportedRequest(request);
@@ -187,11 +207,21 @@ public class KafkaRequestHandler {
                 } else if (apiKey.equals(ApiKeys.LIST_OFFSETS)) {
                     short v = apiKey.latestVersion() > 7 ? 7 : apiKey.latestVersion();
                     apiVersionData.setMaxVersion(v);
+                } else if (apiKey.equals(ApiKeys.GET_TELEMETRY_SUBSCRIPTIONS) || apiKey.equals(ApiKeys.PUSH_TELEMETRY)) {
+                    continue;
                 }
                 data.apiKeys().add(apiVersionData);
             }
         }
         request.complete(new ApiVersionsResponse(data));
+    }
+
+    private void handleTelemetryRequest(KafkaRequest request) {
+        LOG.debug("Telemetry request {} is not supported, returning UNSUPPORTED_VERSION", request.apiKey());
+        AbstractRequest abstractRequest = request.request();
+        AbstractResponse response = abstractRequest.getErrorResponse(
+                Errors.UNSUPPORTED_VERSION.exception());
+        request.complete(response);
     }
 
     private void handleUnsupportedRequest(KafkaRequest request) {

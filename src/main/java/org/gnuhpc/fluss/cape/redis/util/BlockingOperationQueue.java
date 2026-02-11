@@ -116,7 +116,21 @@ public class BlockingOperationQueue {
             return false;
         }
 
-        BlockingRequest request = waiters.remove(0);
+        BlockingRequest request = null;
+        while (!waiters.isEmpty()) {
+            BlockingRequest candidate = waiters.remove(0);
+            if (candidate.ctx.channel().isActive()) {
+                request = candidate;
+                break;
+            }
+        }
+
+        if (request == null) {
+            if (waiters.isEmpty()) {
+                waitingClients.remove(key);
+            }
+            return false;
+        }
 
         for (String k : request.keys) {
             List<BlockingRequest> list = waitingClients.get(k);
@@ -152,7 +166,10 @@ public class BlockingOperationQueue {
             }
         }
 
-        request.ctx.writeAndFlush(org.gnuhpc.fluss.cape.redis.protocol.RedisResponse.nullBulkString());
+        if (request.ctx.channel().isActive()) {
+            request.ctx.writeAndFlush(
+                    org.gnuhpc.fluss.cape.redis.protocol.RedisResponse.nullBulkString());
+        }
     }
 
     /**

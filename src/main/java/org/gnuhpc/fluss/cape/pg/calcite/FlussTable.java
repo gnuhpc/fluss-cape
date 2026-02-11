@@ -30,11 +30,27 @@ import org.apache.fluss.types.RowType;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.RowType;
+import org.gnuhpc.fluss.cape.pg.sql.PgTableScanner;
+
+import java.util.ArrayList;
+import java.util.List;
+
 public class FlussTable extends AbstractTable implements ScannableTable {
 
+    private final Connection connection;
+    private final Admin admin;
     private final TableInfo tableInfo;
 
-    public FlussTable(TableInfo tableInfo) {
+    public FlussTable(Connection connection, Admin admin, TableInfo tableInfo) {
+        this.connection = connection;
+        this.admin = admin;
         this.tableInfo = tableInfo;
     }
 
@@ -52,6 +68,23 @@ public class FlussTable extends AbstractTable implements ScannableTable {
 
     @Override
     public Enumerable<Object[]> scan(org.apache.calcite.DataContext root) {
-        return Linq4j.emptyEnumerable();
+        try {
+            Table table = connection.getTable(tableInfo.getTablePath());
+            List<InternalRow> scannedRows = PgTableScanner.scanTable(connection, table, null, -1);
+            RowType rowType = tableInfo.getRowType();
+            InternalRow.FieldGetter[] getters = InternalRow.createFieldGetters(rowType);
+            
+            List<Object[]> rows = new ArrayList<>();
+            for (InternalRow row : scannedRows) {
+                Object[] result = new Object[rowType.getFieldCount()];
+                for (int i = 0; i < rowType.getFieldCount(); i++) {
+                    result[i] = row.isNullAt(i) ? null : getters[i].getFieldOrNull(row);
+                }
+                rows.add(result);
+            }
+            return Linq4j.asEnumerable(rows);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to scan table: " + tableInfo.getTablePath(), e);
+        }
     }
 }

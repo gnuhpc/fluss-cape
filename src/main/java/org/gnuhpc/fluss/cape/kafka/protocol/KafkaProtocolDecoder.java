@@ -17,12 +17,12 @@
 
 package org.gnuhpc.fluss.cape.kafka.protocol;
 
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
-import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
-import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
-import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.ReferenceCountUtil;
 
 import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;

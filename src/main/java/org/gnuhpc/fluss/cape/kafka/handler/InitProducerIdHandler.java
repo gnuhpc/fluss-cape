@@ -31,13 +31,61 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Handles INIT_PRODUCER_ID requests for idempotent and transactional producers.
  * 
- * For now, we implement basic support for idempotent producers by:
- * 1. Generating unique producer IDs
- * 2. Setting epoch to 0 (no producer fencing)
- * 3. Not supporting full transactional semantics
+ * <h3>⚠️ CRITICAL LIMITATION: No Producer ID Persistence</h3>
+ * <p>Producer IDs and transactional ID mappings are stored in-memory only using an {@code AtomicLong}
+ * counter (starting at 1000) and a {@code ConcurrentHashMap}. This has severe implications:</p>
  * 
- * This allows Kafka 3.x clients to work (they enable idempotence by default),
- * but doesn't provide true exactly-once semantics.
+ * <h4>Impact of CAPE Server Restart:</h4>
+ * <ul>
+ *   <li><b>Producer ID Loss</b>: All assigned producer IDs are lost on restart</li>
+ *   <li><b>Counter Reset</b>: Producer ID counter resets to 1000, causing ID reuse</li>
+ *   <li><b>Broken Idempotence</b>: Kafka's deduplication fails when IDs are reused across restarts</li>
+ *   <li><b>No Transactional Support</b>: Cannot maintain transactional state across restarts</li>
+ * </ul>
+ * 
+ * <h4>Current Behavior:</h4>
+ * <table border="1">
+ *   <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+ *   <tr><td>Idempotent Producers (acks=all)</td><td>⚠️ Partial</td><td>Works within session, broken across restarts</td></tr>
+ *   <tr><td>Transactional Producers</td><td>❌ Not Supported</td><td>Requires persistent state + fencing</td></tr>
+ *   <tr><td>Producer ID Recovery</td><td>❌ None</td><td>No persistence layer implemented</td></tr>
+ *   <tr><td>Epoch Management</td><td>❌ Fixed at 0</td><td>No producer fencing</td></tr>
+ * </table>
+ * 
+ * <h4>Why This Matters:</h4>
+ * <p>Kafka clients in version 3.x+ enable idempotence by default ({@code enable.idempotence=true}).
+ * This handler provides <b>basic compatibility</b> to allow these clients to connect, but does NOT
+ * provide true exactly-once semantics or durability guarantees across CAPE restarts.</p>
+ * 
+ * <h4>Production Impact:</h4>
+ * <pre>{@code
+ * // Scenario: Producer writes with idempotence enabled
+ * producer.send(record1);  // Assigned producerId=1000, epoch=0
+ * producer.send(record2);  // Uses producerId=1000
+ * // CAPE server restarts
+ * producer.send(record3);  // Kafka client still uses producerId=1000
+ *                          // But CAPE reassigns producerId=1000 to DIFFERENT producer!
+ *                          // Result: Duplicate detection fails, data corruption risk
+ * }</pre>
+ * 
+ * <h4>Workarounds:</h4>
+ * <ul>
+ *   <li><b>Disable Idempotence</b>: Set {@code enable.idempotence=false} on Kafka producers (trade-off: lose deduplication)</li>
+ *   <li><b>Use {@code acks=1}</b>: Lower durability guarantee, but avoids idempotence dependency</li>
+ *   <li><b>Avoid CAPE Restarts</b>: Use stable infrastructure to minimize restart frequency</li>
+ *   <li><b>Client-Side Retry Logic</b>: Implement application-level deduplication</li>
+ * </ul>
+ * 
+ * <h4>Future Enhancement Required:</h4>
+ * <p>To fully support idempotent/transactional producers, this handler must:</p>
+ * <ol>
+ *   <li>Store producer IDs in a Fluss system table (e.g., {@code kafka_producer_ids})</li>
+ *   <li>Persist transactional ID → producer ID mappings durably</li>
+ *   <li>Implement epoch bumping for producer fencing</li>
+ *   <li>Handle producer ID recovery on startup</li>
+ * </ol>
+ * 
+ * @see org.gnuhpc.fluss.cape.kafka.handler.ProduceHandler ProduceHandler for flush behavior
  */
 public class InitProducerIdHandler {
     private static final Logger LOG = LoggerFactory.getLogger(InitProducerIdHandler.class);

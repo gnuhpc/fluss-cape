@@ -12,6 +12,9 @@ import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.*;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -20,6 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class KafkaConsumerIntegrationTest {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaConsumerIntegrationTest.class);
 
     private static final String BOOTSTRAP_SERVERS = System.getProperty("kafka.bootstrap.servers", "localhost:9092");
     private static final String TEST_TOPIC_PREFIX = "test-consumer-";
@@ -317,10 +322,8 @@ class KafkaConsumerIntegrationTest {
         double avgLatency = fetchLatencies.stream().mapToLong(Long::longValue).average().orElse(0);
         long maxLatency = fetchLatencies.stream().mapToLong(Long::longValue).max().orElse(0);
         
-        System.out.println(String.format(
-            "Fetch performance: %d fetches | Avg: %.2f ms | Max: %d ms",
-            fetchLatencies.size(), avgLatency, maxLatency
-        ));
+        LOG.info("Fetch performance: {} fetches | Avg: {} ms | Max: {} ms",
+            fetchLatencies.size(), String.format("%.2f", avgLatency), maxLatency);
         
         assertThat(avgLatency).isLessThan(400);
     }

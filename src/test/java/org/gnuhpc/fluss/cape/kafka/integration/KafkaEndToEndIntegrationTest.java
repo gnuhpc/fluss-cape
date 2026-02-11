@@ -15,6 +15,9 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -23,6 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class KafkaEndToEndIntegrationTest {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaEndToEndIntegrationTest.class);
 
     private static final String BOOTSTRAP_SERVERS = System.getProperty("kafka.bootstrap.servers", "localhost:9092");
     private static final String TEST_TOPIC_PREFIX = "test-e2e-";
@@ -315,10 +320,8 @@ class KafkaEndToEndIntegrationTest {
         long produceTimeMs = (produceEndTime - produceStartTime) / 1_000_000;
         double produceThroughput = numRecords * 1000.0 / produceTimeMs;
         
-        System.out.println(String.format(
-            "Produced %d records in %d ms (%.0f records/sec)",
-            numRecords, produceTimeMs, produceThroughput
-        ));
+        LOG.info("Produced {} records in {} ms ({:.0f} records/sec)",
+            numRecords, produceTimeMs, produceThroughput);
         
         Thread.sleep(1000);
         
@@ -342,10 +345,8 @@ class KafkaEndToEndIntegrationTest {
         long consumeTimeMs = (consumeEndTime - consumeStartTime) / 1_000_000;
         double consumeThroughput = numRecords * 1000.0 / consumeTimeMs;
         
-        System.out.println(String.format(
-            "Consumed %d records in %d ms (%.0f records/sec)",
-            numRecords, consumeTimeMs, consumeThroughput
-        ));
+        LOG.info("Consumed {} records in {} ms ({:.0f} records/sec)",
+            numRecords, consumeTimeMs, consumeThroughput);
         
         assertThat(consumedCount).isEqualTo(numRecords);
         assertThat(produceThroughput).isGreaterThan(100);

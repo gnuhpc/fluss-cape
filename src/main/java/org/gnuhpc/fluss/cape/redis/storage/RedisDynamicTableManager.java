@@ -18,6 +18,8 @@
 package org.gnuhpc.fluss.cape.redis.storage;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -25,6 +27,9 @@ import org.apache.fluss.types.DataTypes;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Manager for Redis internal tables with `redis_internal_` prefix.
@@ -41,6 +46,11 @@ public class RedisDynamicTableManager {
     private static final String MAIN_TABLE = "redis_internal_data";
     private static final String ZSET_INDEX_TABLE = "redis_internal_zset_index";
     private static final String SUBKEY_INDEX_TABLE = "redis_internal_subkey_index";
+    
+    // Aggregation tables for atomic increment operations
+    private static final String STRING_COUNTER_TABLE = "redis_internal_string_counters";
+    private static final String HASH_COUNTER_TABLE = "redis_internal_hash_counters";
+    private static final String ZSET_COUNTER_TABLE = "redis_internal_zset_counters";
 
     /**
      * Ensures the main Redis data table exists, creating it if needed.
@@ -155,6 +165,9 @@ public class RedisDynamicTableManager {
         ensureMainTable(admin, database);
         ensureSubkeyIndexTable(admin, database);
         ensureZsetIndexTable(admin, database);
+        ensureStringCounterTable(admin, database);
+        ensureHashCounterTable(admin, database);
+        ensureZsetCounterTable(admin, database);
         LOG.info("Redis internal tables initialization complete");
     }
 
@@ -186,6 +199,142 @@ public class RedisDynamicTableManager {
     /** Returns the subkey index table name. */
     public static String getSubkeyIndexTableName() {
         return SUBKEY_INDEX_TABLE;
+    }
+
+    /** Returns the TablePath for the String counter table (aggregation). */
+    public static TablePath getStringCounterTablePath(String database) {
+        return TablePath.of(database, STRING_COUNTER_TABLE);
+    }
+
+    /** Returns the TablePath for the Hash counter table (aggregation). */
+    public static TablePath getHashCounterTablePath(String database) {
+        return TablePath.of(database, HASH_COUNTER_TABLE);
+    }
+
+    /** Returns the TablePath for the ZSet counter table (aggregation). */
+    public static TablePath getZsetCounterTablePath(String database) {
+        return TablePath.of(database, ZSET_COUNTER_TABLE);
+    }
+
+    /**
+     * Ensures the String counter aggregation table exists.
+     * Schema: (redis_key STRING, delta BIGINT) PK: (redis_key)
+     * Merge Engine: aggregation with SUM on delta
+     */
+    public static void ensureStringCounterTable(Admin admin, String database) throws Exception {
+        TablePath tablePath = getStringCounterTablePath(database);
+
+        if (admin.tableExists(tablePath).get()) {
+            LOG.debug("Redis string counter table '{}' already exists", tablePath);
+            return;
+        }
+
+        LOG.info("Creating Redis string counter aggregation table '{}'...", tablePath);
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("redis_key", DataTypes.STRING())
+                        .column("delta", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("redis_key")
+                        .build();
+
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation")
+                .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        LOG.info("Successfully created Redis string counter aggregation table '{}'", tablePath);
+    }
+
+    /**
+     * Ensures the Hash counter aggregation table exists.
+     * Schema: (redis_key STRING, field STRING, delta BIGINT) PK: (redis_key, field)
+     * Merge Engine: aggregation with SUM on delta
+     */
+    public static void ensureHashCounterTable(Admin admin, String database) throws Exception {
+        TablePath tablePath = getHashCounterTablePath(database);
+
+        if (admin.tableExists(tablePath).get()) {
+            LOG.debug("Redis hash counter table '{}' already exists", tablePath);
+            return;
+        }
+
+        LOG.info("Creating Redis hash counter aggregation table '{}'...", tablePath);
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("redis_key", DataTypes.STRING())
+                        .column("field", DataTypes.STRING())
+                        .column("delta", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("redis_key", "field")
+                        .build();
+
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation")
+                .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        LOG.info("Successfully created Redis hash counter aggregation table '{}'", tablePath);
+    }
+
+    /**
+     * Ensures the ZSet counter aggregation table exists.
+     * Schema: (redis_key STRING, member STRING, delta DOUBLE) PK: (redis_key, member)
+     * Merge Engine: aggregation with SUM on delta
+     */
+    public static void ensureZsetCounterTable(Admin admin, String database) throws Exception {
+        TablePath tablePath = getZsetCounterTablePath(database);
+
+        if (admin.tableExists(tablePath).get()) {
+            LOG.debug("Redis zset counter table '{}' already exists", tablePath);
+            return;
+        }
+
+        LOG.info("Creating Redis zset counter aggregation table '{}'...", tablePath);
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("redis_key", DataTypes.STRING())
+                        .column("member", DataTypes.STRING())
+                        .column("delta", DataTypes.DOUBLE(), AggFunctions.SUM())
+                        .primaryKey("redis_key", "member")
+                        .build();
+
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation")
+                .build();
+
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        LOG.info("Successfully created Redis zset counter aggregation table '{}'", tablePath);
+    }
+
+    /** Returns the TablePath for a sharded Redis table. */
+    public static TablePath getShardTablePath(String database, int shard) {
+        String tableName = String.format("redis_shard_%02d", shard);
+        return TablePath.of(database, tableName);
+    }
+
+    /** Returns the TablePath for a stream shard table. */
+    public static TablePath getStreamShardTablePath(String database, int shard) {
+        String tableName = String.format("redis_stream_shard_%02d", shard);
+        return TablePath.of(database, tableName);
+    }
+
+    /** Returns the TablePath for the legacy stream data table. */
+    public static TablePath getLegacyStreamTablePath(String database) {
+        return TablePath.of(database, "redis_stream_data");
+    }
+
+    /** Returns the TablePaths for stream metadata tables. */
+    public static List<TablePath> getStreamMetadataTablePaths(String database) {
+        List<TablePath> tablePaths = new ArrayList<>();
+        tablePaths.add(TablePath.of(database, "redis_stream_consumer_groups"));
+        tablePaths.add(TablePath.of(database, "redis_stream_pending_entries"));
+        tablePaths.add(TablePath.of(database, "redis_stream_tombstones"));
+        return tablePaths;
     }
 
     public static void ensureShardedTable(Admin admin, TablePath tablePath) throws Exception {

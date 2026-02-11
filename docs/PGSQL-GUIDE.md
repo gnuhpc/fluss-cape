@@ -167,8 +167,10 @@ While the PostgreSQL protocol provides a powerful interface, there are some curr
 1.  **Read-Only Focus**: While `INSERT/UPDATE/DELETE` are supported, the primary optimization and testing focus is on `SELECT` queries.
 2.  **No Transactions**: `BEGIN`, `COMMIT`, and `ROLLBACK` are not supported. Statements are executed in auto-commit mode.
 3.  **Limited SQL Syntax**: Complex joins, window functions, and advanced PostgreSQL-specific extensions may not be fully supported by the underlying execution engine.
-4.  **Authentication**: Only `TRUST` and `cleartext password` modes are implemented. `MD5` and `SCRAM` are not supported.
-5.  **Binary Parameters**: Currently, only text-format parameters are supported in extended query protocols.
+4.  **SSL/TLS**: SSL is not supported. Clients must use `sslmode=disable` or `ssl=false`. Use a TLS-terminating proxy if encryption is required.
+5.  **Authentication**: Only `TRUST` and `cleartext password` modes are implemented. `MD5` and `SCRAM` are not supported.
+6.  **Binary Parameters**: Currently, only text-format parameters are supported in extended query protocols.
+7.  **Result Size Cap**: Queries without `LIMIT` are capped at **10,000 rows** to prevent OOM during hybrid scan. Use `LIMIT` for large tables.
 
 ---
 
@@ -176,8 +178,8 @@ While the PostgreSQL protocol provides a powerful interface, there are some curr
 
 ### Best Practices
 *   **Use Primary Keys**: Queries filtering on primary keys are significantly faster as they use the `Lookuper` API instead of a full scan.
-*   **Limit Result Sets**: Always use `LIMIT` when querying large tables to reduce memory pressure on the CAPE server during the merge phase.
-*   **Monitor Memory**: Since the hybrid scan merges data in-memory, ensure the CAPE server has sufficient heap space for large result sets.
+*   **Limit Result Sets**: Always use `LIMIT` when querying large tables. Queries without `LIMIT` are capped at 10,000 rows.
+*   **Monitor Memory**: Hybrid scans merge data in-memory. Ensure the CAPE server has sufficient heap space for large result sets.
 
 ### Troubleshooting
 *   **Connection Refused**: Verify that Fluss CAPE is running and the `pg.port` (default 15432) is open and not blocked by a firewall.

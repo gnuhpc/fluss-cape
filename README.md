@@ -2,17 +2,17 @@
 
 **C**ompatibility **A**nd **P**rotocol **E**xtensions for Apache Fluss
 
-Transform Apache Fluss into a multi-model database by adding HBase and Redis protocol compatibility.
+Transform Apache Fluss into a multi-model database by adding HBase, Redis, and PostgreSQL protocol compatibility.
 
 ---
 
 ## 🎯 What is Fluss CAPE?
 
-Fluss CAPE is an external compatibility layer that enables applications to interact with [Apache Fluss](https://github.com/alibaba/fluss) using familiar HBase and Redis protocols—without modifying Fluss itself.
+Fluss CAPE is an external compatibility layer that enables applications to interact with [Apache Fluss](https://github.com/alibaba/fluss) using familiar HBase, Redis, and PostgreSQL protocols—without modifying Fluss itself.
 
 **Key Benefits:**
 - 🔌 **Zero Fluss Modifications** - Runs as a standalone translation layer
-- 🚀 **Instant Migration** - Use existing HBase/Redis applications with Fluss
+- 🚀 **Instant Migration** - Use existing HBase/Redis/PostgreSQL applications with Fluss
 - 🔄 **Unified Storage** - Access the same data through multiple protocols
 - ⚡ **Scalable** - Horizontal scaling with multiple CAPE instances
 - 📊 **Production-Ready** - Multiple deployment modes (standalone, clustered, co-located)
@@ -80,6 +80,9 @@ docker run -d \
   --name fluss-cape \
   --network host \
   -p 16020:16020 \
+  -p 6379:6379 \
+  -p 5432:5432 \
+  -p 9092:9092 \
   -p 8080:8080 \
   -e FLUSS_BOOTSTRAP=localhost:9123 \
   -e ZK_QUORUM=localhost:2181 \
@@ -87,9 +90,10 @@ docker run -d \
   -e HEALTH_PORT=8080 \
   fluss-cape:1.0.0
 
+# Kafka and other protocols are all served from the same container; Kafka clients can connect to `localhost:9092` (the default `KAFKA_BIND_PORT`, which is enabled unless you disable Kafka explicitly).
+
 # Check status
 curl http://localhost:8080/health
-```
 
 ### Use HBase Protocol
 
@@ -140,6 +144,40 @@ OK
 2) "100"
 3) "Bob"
 4) "200"
+```
+
+### Use PostgreSQL Protocol
+
+```bash
+# Connect with psql
+psql -h localhost -p 5432 -U fluss -d default
+
+# Create table (note: table name must include database prefix)
+CREATE TABLE default.employees (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100),
+    age INTEGER,
+    email VARCHAR(100)
+);
+
+# Insert data
+INSERT INTO default.employees (id, name, age, email) VALUES (1, 'Alice', 30, 'alice@example.com');
+INSERT INTO default.employees (id, name, age, email) VALUES (2, 'Bob', 25, 'bob@example.com');
+
+# Query all data
+SELECT * FROM default.employees;
+
+# Query with WHERE clause (only equality predicates supported)
+SELECT * FROM default.employees WHERE id = 1;
+
+# Update data
+UPDATE default.employees SET age = 31 WHERE id = 1;
+
+# Delete data
+DELETE FROM default.employees WHERE id = 2;
+
+# Drop table
+DROP TABLE default.employees;
 ```
 
 ---
@@ -204,13 +242,21 @@ Create and modify tables on-the-fly:
 Access the same data through different interfaces:
 - Write via Redis, read via HBase
 - Batch processing (HBase) + Real-time access (Redis)
-- SQL queries (Phoenix) + KV operations (Redis)
+- SQL queries (PostgreSQL) + KV operations (Redis)
+- Analytics (PostgreSQL) + Low-latency reads (HBase)
 
 ### 4. Redis with Durability
 Use Redis protocol with Fluss's durable storage:
 - Session storage with replay capability
 - Real-time leaderboards with historical data
 - Message queues with persistence
+
+### 5. SQL Interface for Streaming Data
+Query Fluss tables using standard SQL:
+- Business intelligence tools (DBeaver, pgAdmin, Tableau)
+- PostgreSQL-compatible ORMs (SQLAlchemy, Hibernate)
+- Ad-hoc analysis with familiar SQL syntax
+- Integration with PostgreSQL ecosystem
 
 ---
 

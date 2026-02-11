@@ -26,6 +26,8 @@ import org.gnuhpc.fluss.cape.hbase.mapping.DynamicTableCodec;
 import org.gnuhpc.fluss.cape.hbase.mapping.RowKeyEncoder;
 import org.gnuhpc.fluss.cape.hbase.protocol.HBaseRpcRequest;
 import org.gnuhpc.fluss.cape.hbase.protocol.HBaseRpcResponse;
+import org.gnuhpc.fluss.cape.hbase.storage.HBaseCounterTableManager;
+import org.gnuhpc.fluss.cape.hbase.storage.HBaseIncrementAdapter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataField;
@@ -53,9 +55,11 @@ public class PutExecutor implements HBaseOperationExecutor {
     private final RowKeyEncoder rowKeyEncoder;
     private final CellConverter cellConverter;
 
-    private final ThreadLocal<UpsertWriter> upsertWriter;
-    private final ThreadLocal<Lookuper> lookuper;
+    private final UpsertWriter upsertWriter;
+    private final Lookuper lookuper;
     private final CheckAndMutateExecutor checkAndMutateExecutor;
+    private final HBaseIncrementAdapter incrementAdapter;
+    private final boolean useAtomicIncrement;
 
     public PutExecutor(
             Connection flussConnection,
@@ -69,19 +73,34 @@ public class PutExecutor implements HBaseOperationExecutor {
         this.rowKeyEncoder = rowKeyEncoder;
         this.cellConverter = cellConverter;
 
-        this.upsertWriter = ThreadLocal.withInitial(this::createUpsertWriter);
-        this.lookuper = ThreadLocal.withInitial(this::createLookuper);
+        this.upsertWriter = createUpsertWriter();
+        this.lookuper = createLookuper();
         this.checkAndMutateExecutor =
                 new CheckAndMutateExecutor(
                         flussConnection, tablePath, rowType, rowKeyEncoder, cellConverter);
+        
+        HBaseIncrementAdapter adapter = null;
+        boolean atomicIncrement = false;
+        try {
+            adapter = new HBaseIncrementAdapter(
+                    flussConnection, tablePath.getDatabaseName(), tablePath.getTableName());
+            atomicIncrement = true;
+            LOG.info("Atomic increment enabled for table {} using aggregation engine", tablePath);
+        } catch (Exception e) {
+            LOG.warn("Counter table not available for {}, falling back to non-atomic increment: {}", 
+                    tablePath, e.getMessage());
+        }
+        this.incrementAdapter = adapter;
+        this.useAtomicIncrement = atomicIncrement;
+        
         LOG.info(
-                "PutExecutor initialized with per-thread UpsertWriter/Lookuper for table {}",
+                "PutExecutor initialized with shared UpsertWriter/Lookuper for table {}",
                 tablePath);
     }
 
     @Override
     public CompletableFuture<HBaseRpcResponse> execute(HBaseRpcRequest request) {
-        LOG.info(
+        LOG.debug(
                 "[PUTEXEC] START execute: callId={}, methodName={}",
                 request.getCallId(),
                 request.getMethodName());
@@ -97,20 +116,20 @@ public class PutExecutor implements HBaseOperationExecutor {
             }
 
 
-            LOG.info(
+            LOG.debug(
                     "[PUTEXEC] Parsing MutateRequest protobuf, size={} bytes", requestBytes.length);
             ClientProtos.MutateRequest mutateRequest =
                     ClientProtos.MutateRequest.parseFrom(requestBytes);
 
             // Check if this is a CheckAndMutate request
             if (mutateRequest.hasCondition()) {
-                LOG.info(
+                LOG.debug(
                         "[PUTEXEC] Detected CheckAndMutate request, delegating to CheckAndMutateExecutor");
                 return checkAndMutateExecutor.execute(request);
             }
 
             ClientProtos.MutationProto mutation = mutateRequest.getMutation();
-            LOG.info(
+            LOG.debug(
                     "[PUTEXEC] Parsed mutation: type={}, rowKeySize={}, columnValueCount={}",
                     mutation.getMutateType(),
                     mutation.getRow().size(),
@@ -118,28 +137,30 @@ public class PutExecutor implements HBaseOperationExecutor {
 
             byte[] rowKey = mutation.getRow().toByteArray();
             GenericRow keyRow = rowKeyEncoder.decodeRowKey(rowKey);
-            LOG.info(
+            LOG.debug(
                     "[PUTEXEC] Decoded rowKey: {} ({})",
                     keyRow,
                     org.apache.hadoop.hbase.util.Bytes.toStringBinary(rowKey));
 
             switch (mutation.getMutateType()) {
                 case PUT:
-                    LOG.info("[PUTEXEC] Routing to executePut for callId={}", request.getCallId());
+                    LOG.debug("[PUTEXEC] Routing to executePut for callId={}", request.getCallId());
                     return executePut(request.getCallId(), keyRow, mutation);
                 case DELETE:
-                    LOG.info(
+                    LOG.debug(
                             "[PUTEXEC] Routing to executeDelete for callId={}",
                             request.getCallId());
-                    return executeDelete(request.getCallId(), keyRow);
+                    return executeDelete(request.getCallId(), rowKey, keyRow, mutation);
                 case INCREMENT:
+                    LOG.debug("[PUTEXEC] Routing to executeAtomicIncrement for callId={}", 
+                            request.getCallId());
+                    return executeAtomicIncrement(request.getCallId(), rowKey, keyRow, mutation);
                 case APPEND:
                     return CompletableFuture.completedFuture(
                             HBaseRpcResponse.failure(
                                     request.getCallId(),
                                     new UnsupportedOperationException(
-                                            "Non-atomic mutation type is not supported: "
-                                                    + mutation.getMutateType())));
+                                            "APPEND is not supported with atomic guarantee")));
                 default:
                     throw new UnsupportedOperationException(
                             "Unsupported mutation type: " + mutation.getMutateType());
@@ -186,23 +207,23 @@ public class PutExecutor implements HBaseOperationExecutor {
     private CompletableFuture<HBaseRpcResponse> executePut(
             int callId, GenericRow keyRow, ClientProtos.MutationProto mutation) {
         try {
-            LOG.info(
+            LOG.debug(
                     "[PUTEXEC] executePut START: callId={}, keyRow={}, columnValueCount={}",
                     callId,
                     keyRow,
                     mutation.getColumnValueCount());
 
-            LOG.info("[PUTEXEC] Calling lookuper.lookup() for callId={}", callId);
+            LOG.debug("[PUTEXEC] Calling lookuper.lookup() for callId={}", callId);
             CompletableFuture<org.apache.fluss.client.lookup.LookupResult> lookupFuture =
-                    lookuper.get().lookup(keyRow);
-            LOG.info(
+                    lookuper.lookup(keyRow);
+            LOG.debug(
                     "[PUTEXEC] lookup() returned future (isDone={}), attaching .handle() chain",
                     lookupFuture.isDone());
 
             return lookupFuture
                     .handle(
                             (lookupResult, lookupError) -> {
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] .handle() invoked: callId={}, hasError={}, hasResult={}",
                                         callId,
                                         lookupError != null,
@@ -218,13 +239,13 @@ public class PutExecutor implements HBaseOperationExecutor {
                                 if (lookupResult != null
                                         && lookupResult.getRowList() != null
                                         && !lookupResult.getRowList().isEmpty()) {
-                                    LOG.info(
+                                    LOG.debug(
                                             "[PUTEXEC] Existing row found for callId={}, rowCount={}",
                                             callId,
                                             lookupResult.getRowList().size());
                                     return lookupResult.getRowList().get(0);
                                 } else {
-                                    LOG.info(
+                                    LOG.debug(
                                             "[PUTEXEC] No existing row found for callId={} (will insert new)",
                                             callId);
                                 }
@@ -232,23 +253,23 @@ public class PutExecutor implements HBaseOperationExecutor {
                             })
                     .thenCompose(
                             existingRow -> {
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] .thenCompose() invoked: callId={}, buildingRow",
                                         callId);
                                 GenericRow fullRow =
                                         buildRowFromMutation(keyRow, mutation, existingRow);
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] Built fullRow: callId={}, row={}",
                                         callId,
                                         fullRow);
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] Calling upsertWriter.upsert() for callId={}",
                                         callId);
-            return upsertWriter.get()
+            return upsertWriter
                     .upsert(fullRow)
                     .thenApply(
                             v -> {
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] Upsert complete for callId={}, returning success",
                                         callId);
                                 return HBaseRpcResponse.success(callId, ClientProtos.MutateResponse.newBuilder().build());
@@ -266,14 +287,14 @@ public class PutExecutor implements HBaseOperationExecutor {
                             })
                     .thenApply(
                             result -> {
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] .thenApply() SUCCESS: callId={}, building response",
                                         callId);
                                 ClientProtos.MutateResponse response =
                                         ClientProtos.MutateResponse.newBuilder().build();
                                 HBaseRpcResponse rpcResponse =
                                         HBaseRpcResponse.success(callId, response);
-                                LOG.info(
+                                LOG.debug(
                                         "[PUTEXEC] executePut COMPLETED SUCCESSFULLY: callId={}",
                                         callId);
                                 return rpcResponse;
@@ -296,24 +317,157 @@ public class PutExecutor implements HBaseOperationExecutor {
         }
     }
 
-    private CompletableFuture<HBaseRpcResponse> executeDelete(int callId, GenericRow keyRow) {
-        return upsertWriter.get()
-                .delete(keyRow)
-                .thenApply(
-                        result -> {
-                            ClientProtos.MutateResponse response =
-                                    ClientProtos.MutateResponse.newBuilder().build();
-                            return HBaseRpcResponse.success(callId, response);
-                        })
-                .exceptionally(
-                        throwable -> {
-                            LOG.error("Fluss delete failed", throwable);
-                            return HBaseRpcResponse.failure(
-                                    callId,
-                                    throwable instanceof Exception
-                                            ? (Exception) throwable
-                                            : new Exception(throwable));
-                        });
+    private CompletableFuture<HBaseRpcResponse> executeAtomicIncrement(
+            int callId, byte[] rowKey, GenericRow keyRow, ClientProtos.MutationProto mutation) {
+        
+        if (!useAtomicIncrement || incrementAdapter == null) {
+            LOG.debug("[PUTEXEC] Falling back to non-atomic increment for callId={}", callId);
+            return executeIncrement(callId, keyRow, mutation);
+        }
+
+        try {
+            Map<String, Long> increments = new HashMap<>();
+            
+            for (ClientProtos.MutationProto.ColumnValue columnValue : mutation.getColumnValueList()) {
+                String family = org.apache.hadoop.hbase.util.Bytes.toString(
+                        columnValue.getFamily().toByteArray());
+                
+                for (ClientProtos.MutationProto.ColumnValue.QualifierValue qualifierValue :
+                        columnValue.getQualifierValueList()) {
+                    if (!qualifierValue.hasValue()) {
+                        continue;
+                    }
+                    
+                    String qualifier = org.apache.hadoop.hbase.util.Bytes.toString(
+                            qualifierValue.getQualifier().toByteArray());
+                    long delta = org.apache.hadoop.hbase.util.Bytes.toLong(
+                            qualifierValue.getValue().toByteArray());
+                    
+                    String columnKey = HBaseCounterTableManager.buildColumnKey(family, qualifier);
+                    increments.put(columnKey, delta);
+                }
+            }
+
+            return incrementAdapter.incrementColumns(rowKey, increments)
+                    .thenCompose(newValues -> syncToMainTableAndBuildResponse(
+                            callId, rowKey, keyRow, newValues))
+                    .exceptionally(throwable -> {
+                        LOG.error("[PUTEXEC] Atomic increment failed for callId={}: {}", 
+                                callId, throwable.getMessage(), throwable);
+                        return HBaseRpcResponse.failure(
+                                callId,
+                                throwable instanceof Exception
+                                        ? (Exception) throwable
+                                        : new Exception(throwable));
+                    });
+
+        } catch (Exception e) {
+            LOG.error("[PUTEXEC] Failed to parse increment request for callId={}: {}", 
+                    callId, e.getMessage(), e);
+            return CompletableFuture.completedFuture(HBaseRpcResponse.failure(callId, e));
+        }
+    }
+
+    private CompletableFuture<HBaseRpcResponse> syncToMainTableAndBuildResponse(
+            int callId, byte[] rowKeyBytes, GenericRow keyRow, Map<String, Long> newValues) {
+        
+        GenericRow fullRow = new GenericRow(rowType.getFieldCount());
+        
+        for (int i = 0; i < keyRow.getFieldCount(); i++) {
+            if (!keyRow.isNullAt(i)) {
+                fullRow.setField(i, keyRow.getField(i));
+            }
+        }
+
+        for (Map.Entry<String, Long> entry : newValues.entrySet()) {
+            String columnKey = entry.getKey();
+            long value = entry.getValue();
+            
+            String qualifier = HBaseCounterTableManager.parseQualifier(columnKey);
+            int fieldIndex = findFieldIndex(qualifier);
+            
+            if (fieldIndex >= 0) {
+                fullRow.setField(fieldIndex, value);
+            }
+        }
+
+        return upsertWriter.upsert(fullRow)
+                .thenApply(v -> {
+                    ClientProtos.MutateResponse.Builder responseBuilder =
+                            ClientProtos.MutateResponse.newBuilder();
+                    ClientProtos.Result resultProto = buildResultProto(rowKeyBytes, fullRow);
+                    responseBuilder.setResult(resultProto);
+                    LOG.info("[PUTEXEC] Atomic increment completed for callId={}", callId);
+                    return HBaseRpcResponse.success(callId, responseBuilder.build());
+                });
+    }
+
+    private CompletableFuture<HBaseRpcResponse> executeDelete(
+            int callId, byte[] rowKeyBytes, GenericRow keyRow, ClientProtos.MutationProto mutation) {
+        
+        CompletableFuture<Void> clearCountersFuture = CompletableFuture.completedFuture(null);
+        
+        if (useAtomicIncrement && incrementAdapter != null) {
+            List<String> columnKeys = new ArrayList<>();
+            boolean hasRowOrFamilyDelete = false;
+            
+            if (mutation.getColumnValueCount() == 0) {
+                // Full row delete - no column specification
+                hasRowOrFamilyDelete = true;
+            } else {
+                for (ClientProtos.MutationProto.ColumnValue columnValue : 
+                        mutation.getColumnValueList()) {
+                    String family = org.apache.hadoop.hbase.util.Bytes.toString(
+                            columnValue.getFamily().toByteArray());
+                    
+                    if (columnValue.getQualifierValueCount() == 0) {
+                        // Family-level delete (no specific qualifiers)
+                        hasRowOrFamilyDelete = true;
+                    } else {
+                        for (ClientProtos.MutationProto.ColumnValue.QualifierValue qualifierValue :
+                                columnValue.getQualifierValueList()) {
+                            String qualifier = org.apache.hadoop.hbase.util.Bytes.toString(
+                                    qualifierValue.getQualifier().toByteArray());
+                            columnKeys.add(
+                                    HBaseCounterTableManager.buildColumnKey(family, qualifier));
+                        }
+                    }
+                }
+            }
+            
+            if (hasRowOrFamilyDelete) {
+                // For row-level or family-level deletes, we can't know which specific counters exist
+                // without scanning. Log a warning for now.
+                // TODO: Implement prefix scan in HBaseIncrementAdapter to clear all counters for a row
+                LOG.warn("[PUTEXEC] Row or family-level delete for callId={} - "
+                        + "counter entries may remain orphaned. "
+                        + "Consider using column-level deletes for proper counter cleanup.", callId);
+            }
+            
+            if (!columnKeys.isEmpty()) {
+                LOG.debug("[PUTEXEC] Clearing {} counter entries before delete for callId={}: {}",
+                        columnKeys.size(), callId, columnKeys);
+                clearCountersFuture = incrementAdapter.clearCounters(rowKeyBytes, columnKeys);
+            }
+        }
+        
+        return clearCountersFuture
+                .thenCompose(v -> upsertWriter.delete(keyRow))
+                .thenApply(result -> {
+                    ClientProtos.MutateResponse response =
+                            ClientProtos.MutateResponse.newBuilder().build();
+                    LOG.debug("[PUTEXEC] Delete completed for callId={}", callId);
+                    return HBaseRpcResponse.success(callId, response);
+                })
+                .exceptionally(throwable -> {
+                    LOG.error("[PUTEXEC] Delete failed for callId={}: {}", 
+                            callId, throwable.getMessage(), throwable);
+                    return HBaseRpcResponse.failure(
+                            callId,
+                            throwable instanceof Exception
+                                    ? (Exception) throwable
+                                    : new Exception(throwable));
+                });
     }
 
     private CompletableFuture<HBaseRpcResponse> executeIncrement(
@@ -325,7 +479,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                     keyRow,
                     mutation.getColumnValueCount());
 
-            return lookuper.get().lookup(keyRow)
+            return lookuper.lookup(keyRow)
                     .handle(
                             (lookupResult, lookupError) -> {
                                 if (lookupError != null) {
@@ -351,7 +505,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                                         "[PUTEXEC] Built increment row: callId={}, row={}",
                                         callId,
                                         fullRow);
-                                return upsertWriter.get()
+                                return upsertWriter
                                         .upsert(fullRow)
                                         .thenApply(
                                                 upsertResult -> {
@@ -402,7 +556,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                     keyRow,
                     mutation.getColumnValueCount());
 
-            return lookuper.get().lookup(keyRow)
+            return lookuper.lookup(keyRow)
                     .handle(
                             (lookupResult, lookupError) -> {
                                 if (lookupError != null) {
@@ -427,7 +581,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                                         "[PUTEXEC] Built append row: callId={}, row={}",
                                         callId,
                                         fullRow);
-                                return upsertWriter.get()
+                                return upsertWriter
                                         .upsert(fullRow)
                                         .thenApply(
                                                 upsertResult -> {
@@ -531,7 +685,7 @@ public class PutExecutor implements HBaseOperationExecutor {
 
     private CompletableFuture<HBaseRpcResponse> executeRowMutationsInternal(
             int callId, GenericRow keyRow, List<ClientProtos.MutationProto> mutations) {
-        return lookuper.get().lookup(keyRow)
+        return lookuper.lookup(keyRow)
                 .handle(
                         (lookupResult, lookupError) -> {
                             if (lookupError != null) {
@@ -552,7 +706,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                         existingRow -> {
                             GenericRow fullRow =
                                     buildRowFromMultipleMutations(keyRow, mutations, existingRow);
-                            return upsertWriter.get().upsert(fullRow).thenApply(result -> fullRow);
+                            return upsertWriter.upsert(fullRow).thenApply(result -> fullRow);
                         })
                 .thenApply(
                         fullRow -> {
@@ -776,7 +930,7 @@ public class PutExecutor implements HBaseOperationExecutor {
             GenericRow keyRow,
             ClientProtos.MutationProto mutation,
             org.apache.fluss.row.InternalRow existingRow) {
-        LOG.info(
+        LOG.debug(
                 "[PUTEXEC] buildRowFromMutation: keyRow={}, hasExisting={}, fieldCount={}",
                 keyRow,
                 existingRow != null,
@@ -788,7 +942,7 @@ public class PutExecutor implements HBaseOperationExecutor {
                 fullRow.setField(i, keyRow.getField(i));
             }
         }
-        LOG.info("[PUTEXEC] Copied {} key fields from keyRow", keyRow.getFieldCount());
+        LOG.debug("[PUTEXEC] Copied {} key fields from keyRow", keyRow.getFieldCount());
 
         if (isDynamicTable()) {
             return buildRowForDynamicTable(fullRow, mutation, existingRow);
@@ -1314,7 +1468,7 @@ public class PutExecutor implements HBaseOperationExecutor {
             }
         }
         
-        UpsertWriter writer = upsertWriter.get();
+        UpsertWriter writer = upsertWriter;
         if (writer != null) {
             try {
                 writer.flush();
@@ -1322,9 +1476,6 @@ public class PutExecutor implements HBaseOperationExecutor {
                 LOG.warn("Failed to flush upsert writer", e);
             }
         }
-        upsertWriter.remove();
-        lookuper.remove();
-        
-        LOG.info("PutExecutor closed and ThreadLocal resources cleaned up");
+        LOG.info("PutExecutor closed");
     }
 }

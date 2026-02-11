@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.protocol.RedisCommand;
 import org.gnuhpc.fluss.cape.redis.protocol.RedisResponse;
@@ -113,16 +114,16 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
         }
 
         List<byte[]> zaddArgs = new ArrayList<>();
-        zaddArgs.add(key.getBytes());
+        zaddArgs.add(key.getBytes(StandardCharsets.UTF_8));
 
         if (xxOption) {
-            zaddArgs.add("XX".getBytes());
+            zaddArgs.add("XX".getBytes(StandardCharsets.UTF_8));
         } else if (nxOption) {
-            zaddArgs.add("NX".getBytes());
+            zaddArgs.add("NX".getBytes(StandardCharsets.UTF_8));
         }
 
         if (chOption) {
-            zaddArgs.add("CH".getBytes());
+            zaddArgs.add("CH".getBytes(StandardCharsets.UTF_8));
         }
 
         int addedCount = 0;
@@ -145,8 +146,8 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
             long geohash = GeoHashHelper.encode(longitude, latitude);
             double score = (double) geohash;
 
-            zaddArgs.add(String.valueOf(score).getBytes());
-            zaddArgs.add(member.getBytes());
+            zaddArgs.add(String.valueOf(score).getBytes(StandardCharsets.UTF_8));
+            zaddArgs.add(member.getBytes(StandardCharsets.UTF_8));
         }
 
         RedisCommand zaddCommand = new RedisCommand("ZADD", zaddArgs);
@@ -177,7 +178,7 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
             double distanceInMeters = GeoHashHelper.calculateDistance(pos1[0], pos1[1], pos2[0], pos2[1]);
             double result = GeoHashHelper.convertFromMeters(distanceInMeters, unit);
 
-            return RedisResponse.bulkString(String.format("%.4f", result).getBytes());
+            return RedisResponse.bulkString(String.format("%.4f", result).getBytes(StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
             return RedisErrorSanitizer.sanitizeError(e, "GEODIST");
         }
@@ -200,8 +201,8 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
                 results.add(RedisResponse.nullBulkString());
             } else {
                 List<byte[]> coords = new ArrayList<>();
-                coords.add(String.format("%.17g", position[0]).getBytes());
-                coords.add(String.format("%.17g", position[1]).getBytes());
+                coords.add(String.format("%.17g", position[0]).getBytes(StandardCharsets.UTF_8));
+                coords.add(String.format("%.17g", position[1]).getBytes(StandardCharsets.UTF_8));
                 results.add(RedisResponse.bytesArray(coords));
             }
         }
@@ -340,10 +341,10 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
         double heightMeters = byBox ? GeoHashHelper.convertToMeters(height, unit) : 0;
 
         List<byte[]> zrangeArgs = new ArrayList<>();
-        zrangeArgs.add(key.getBytes());
-        zrangeArgs.add("0".getBytes());
-        zrangeArgs.add("-1".getBytes());
-        zrangeArgs.add("WITHSCORES".getBytes());
+        zrangeArgs.add(key.getBytes(StandardCharsets.UTF_8));
+        zrangeArgs.add("0".getBytes(StandardCharsets.UTF_8));
+        zrangeArgs.add("-1".getBytes(StandardCharsets.UTF_8));
+        zrangeArgs.add("WITHSCORES".getBytes(StandardCharsets.UTF_8));
         RedisCommand zrangeCommand = new RedisCommand("ZRANGE", zrangeArgs);
         RedisMessage zrangeResponse = zsetExecutor.execute(zrangeCommand);
 
@@ -407,24 +408,24 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
         List<RedisMessage> finalResults = new ArrayList<>();
         for (GeoHashHelper.GeoSearchResult result : results) {
             if (!withCoord && !withDist && !withHash) {
-                finalResults.add(RedisResponse.bulkString(result.member.getBytes()));
+                finalResults.add(RedisResponse.bulkString(result.member.getBytes(StandardCharsets.UTF_8)));
             } else {
                 List<RedisMessage> itemData = new ArrayList<>();
-                itemData.add(RedisResponse.bulkString(result.member.getBytes()));
+                itemData.add(RedisResponse.bulkString(result.member.getBytes(StandardCharsets.UTF_8)));
 
                 if (withDist) {
                     double distInUnit = GeoHashHelper.convertFromMeters(result.distance, unit);
-                    itemData.add(RedisResponse.bulkString(String.format("%.4f", distInUnit).getBytes()));
+                    itemData.add(RedisResponse.bulkString(String.format("%.4f", distInUnit).getBytes(StandardCharsets.UTF_8)));
                 }
 
                 if (withHash) {
-                    itemData.add(RedisResponse.bulkString(String.valueOf(result.geohash).getBytes()));
+                    itemData.add(RedisResponse.bulkString(String.valueOf(result.geohash).getBytes(StandardCharsets.UTF_8)));
                 }
 
                 if (withCoord) {
                     List<byte[]> coords = new ArrayList<>();
-                    coords.add(String.format("%.17g", result.longitude).getBytes());
-                    coords.add(String.format("%.17g", result.latitude).getBytes());
+                    coords.add(String.format("%.17g", result.longitude).getBytes(StandardCharsets.UTF_8));
+                    coords.add(String.format("%.17g", result.latitude).getBytes(StandardCharsets.UTF_8));
                     itemData.add(RedisResponse.bytesArray(coords));
                 }
 
@@ -437,8 +438,8 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
 
     private double[] getMemberPosition(String key, String member) {
         List<byte[]> args = new ArrayList<>();
-        args.add(key.getBytes());
-        args.add(member.getBytes());
+        args.add(key.getBytes(StandardCharsets.UTF_8));
+        args.add(member.getBytes(StandardCharsets.UTF_8));
         RedisCommand zscoreCommand = new RedisCommand("ZSCORE", args);
         RedisMessage response = zsetExecutor.execute(zscoreCommand);
 
@@ -488,7 +489,7 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> searchCmdArgs = new ArrayList<>();
         for (String arg : searchArgs) {
-            searchCmdArgs.add(arg.getBytes());
+            searchCmdArgs.add(arg.getBytes(StandardCharsets.UTF_8));
         }
         RedisCommand searchCommand = new RedisCommand("GEOSEARCH", searchCmdArgs);
 
@@ -506,7 +507,7 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
                 (io.netty.handler.codec.redis.ArrayRedisMessage) searchResponse;
 
         List<byte[]> zaddArgs = new ArrayList<>();
-        zaddArgs.add(destKey.getBytes());
+        zaddArgs.add(destKey.getBytes(StandardCharsets.UTF_8));
 
         int storedCount = 0;
 
@@ -521,8 +522,8 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
                     long geohash = GeoHashHelper.encode(pos[0], pos[1]);
                     double score = storeDist ? 0.0 : (double) geohash;
 
-                    zaddArgs.add(String.valueOf(score).getBytes());
-                    zaddArgs.add(member.getBytes());
+                    zaddArgs.add(String.valueOf(score).getBytes(StandardCharsets.UTF_8));
+                    zaddArgs.add(member.getBytes(StandardCharsets.UTF_8));
                     storedCount++;
                 }
             } else if (itemMsg instanceof io.netty.handler.codec.redis.ArrayRedisMessage) {
@@ -555,8 +556,8 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
                     score = (double) geohash;
                 }
 
-                zaddArgs.add(String.valueOf(score).getBytes());
-                zaddArgs.add(member.getBytes());
+                zaddArgs.add(String.valueOf(score).getBytes(StandardCharsets.UTF_8));
+                zaddArgs.add(member.getBytes(StandardCharsets.UTF_8));
                 storedCount++;
             }
         }
@@ -582,10 +583,10 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> geosearchArgs = new ArrayList<>();
         geosearchArgs.add(command.getArg(0));
-        geosearchArgs.add("FROMLONLAT".getBytes());
+        geosearchArgs.add("FROMLONLAT".getBytes(StandardCharsets.UTF_8));
         geosearchArgs.add(command.getArg(1));
         geosearchArgs.add(command.getArg(2));
-        geosearchArgs.add("BYRADIUS".getBytes());
+        geosearchArgs.add("BYRADIUS".getBytes(StandardCharsets.UTF_8));
         geosearchArgs.add(command.getArg(3));
         geosearchArgs.add(command.getArg(4));
         
@@ -604,9 +605,9 @@ public class GeoCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> geosearchArgs = new ArrayList<>();
         geosearchArgs.add(command.getArg(0));
-        geosearchArgs.add("FROMMEMBER".getBytes());
+        geosearchArgs.add("FROMMEMBER".getBytes(StandardCharsets.UTF_8));
         geosearchArgs.add(command.getArg(1));
-        geosearchArgs.add("BYRADIUS".getBytes());
+        geosearchArgs.add("BYRADIUS".getBytes(StandardCharsets.UTF_8));
         geosearchArgs.add(command.getArg(2));
         geosearchArgs.add(command.getArg(3));
         

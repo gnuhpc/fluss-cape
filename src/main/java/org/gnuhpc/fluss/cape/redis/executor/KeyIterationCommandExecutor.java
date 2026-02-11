@@ -38,6 +38,68 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * Executor for Redis key iteration commands (KEYS, SCAN).
+ *
+ * <h3>⚠️ CRITICAL PERFORMANCE WARNING: KEYS Command</h3>
+ * <p>The KEYS command loads ALL keys from Fluss storage into memory and performs pattern matching
+ * in-process. This can cause severe performance degradation and memory exhaustion in production
+ * environments with large datasets.</p>
+ *
+ * <h4>Performance Impact:</h4>
+ * <table border="1">
+ *   <tr><th>Key Count</th><th>Memory Usage</th><th>Execution Time</th><th>Production Risk</th></tr>
+ *   <tr><td>1K keys</td><td>~100 KB</td><td>~10ms</td><td>🟢 Safe</td></tr>
+ *   <tr><td>100K keys</td><td>~10 MB</td><td>~500ms</td><td>🟡 Caution</td></tr>
+ *   <tr><td>1M keys</td><td>~100 MB</td><td>~5s</td><td>🔴 Dangerous - Blocks event loop</td></tr>
+ *   <tr><td>10M+ keys</td><td>~1 GB+</td><td>~30s+</td><td>🔴 CRITICAL - OOM risk</td></tr>
+ * </table>
+ *
+ * <h4>Why This Happens:</h4>
+ * <ol>
+ *   <li>{@code getAllKeys()} performs full table scan via {@link RedisStorageAdapter#getAllKeys()}</li>
+ *   <li>All keys loaded into Java heap memory as {@code Set<String>}</li>
+ *   <li>Pattern matching executed in single thread (blocks Netty event loop)</li>
+ *   <li>No pagination, no streaming - all keys materialized at once</li>
+ * </ol>
+ *
+ * <h4>Alternative: Use SCAN Command</h4>
+ * <p>SCAN provides cursor-based iteration with bounded memory usage:</p>
+ * <pre>{@code
+ * # Instead of KEYS * (loads all keys)
+ * SCAN 0 MATCH user:* COUNT 100
+ * # Returns: cursor + batch of keys (max ~100)
+ * 
+ * # Continue iterating
+ * SCAN <cursor> MATCH user:* COUNT 100
+ * }</pre>
+ *
+ * <p><b>SCAN advantages:</b></p>
+ * <ul>
+ *   <li>Bounded memory usage (only COUNT keys in memory per iteration)</li>
+ *   <li>Non-blocking (client controls iteration speed)</li>
+ *   <li>Production-safe for datasets of any size</li>
+ * </ul>
+ *
+ * <h4>When KEYS is Acceptable:</h4>
+ * <ul>
+ *   <li>Development/testing environments only</li>
+ *   <li>Known small datasets (\u003c10K keys)</li>
+ *   <li>Debugging/troubleshooting (never in production hot path)</li>
+ * </ul>
+ *
+ * <h4>Production Recommendations:</h4>
+ * <ul>
+ *   <li>✅ Use SCAN for production workloads</li>
+ *   <li>✅ Monitor memory usage when KEYS is executed</li>
+ *   <li>⚠️ Consider rate-limiting KEYS command</li>
+ *   <li>⚠️ Add application-level warnings when KEYS is used</li>
+ *   <li>❌ NEVER use KEYS in production with \u003e100K keys</li>
+ * </ul>
+ *
+ * @see <a href="https://redis.io/commands/keys/">Redis KEYS Documentation</a>
+ * @see <a href="https://redis.io/commands/scan/">Redis SCAN Documentation</a>
+ */
 public class KeyIterationCommandExecutor implements RedisCommandExecutor {
 
     private static final Logger LOG = LoggerFactory.getLogger(KeyIterationCommandExecutor.class);

@@ -13,6 +13,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -29,6 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 class KafkaProducerIntegrationTest {
+
+    private static final Logger LOG = LoggerFactory.getLogger(KafkaProducerIntegrationTest.class);
 
     private static final String BOOTSTRAP_SERVERS = System.getProperty("kafka.bootstrap.servers", "localhost:9092");
     private static final String TEST_TOPIC_PREFIX = "test-producer-";
@@ -105,10 +110,8 @@ class KafkaProducerIntegrationTest {
             assertThat(metadata.topic()).isEqualTo(testTopic);
         }
         
-        System.out.println(String.format(
-            "Produced %d records in %d ms (avg: %.2f ms/record, throughput: %.0f records/sec)",
-            numRecords, totalTime, (double) totalTime / numRecords, numRecords * 1000.0 / totalTime
-        ));
+        LOG.info("Produced {} records in {} ms (avg: {:.2f} ms/record, throughput: {:.0f} records/sec)",
+            numRecords, totalTime, (double) totalTime / numRecords, numRecords * 1000.0 / totalTime);
         
         assertThat(totalTime).isLessThan(5000);
     }
@@ -282,10 +285,8 @@ class KafkaProducerIntegrationTest {
         double avgLatencyMs = (double) totalTimeMs / benchmarkRecords;
         double throughput = benchmarkRecords * 1000.0 / totalTimeMs;
         
-        System.out.println(String.format(
-            "Performance: %d records in %d ms | Avg latency: %.2f ms | Throughput: %.0f records/sec",
-            benchmarkRecords, totalTimeMs, avgLatencyMs, throughput
-        ));
+        LOG.info("Performance: {} records in {} ms | Avg latency: {:.2f} ms | Throughput: {:.0f} records/sec",
+            benchmarkRecords, totalTimeMs, avgLatencyMs, throughput);
         
         assertThat(avgLatencyMs).isLessThan(50);
         assertThat(throughput).isGreaterThan(100);

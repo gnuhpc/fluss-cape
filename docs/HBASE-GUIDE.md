@@ -30,6 +30,8 @@ Fluss CAPE provides HBase 2.x/3.x protocol compatibility for:
 | **Delete** | ✅ Full | Single-row deletion |
 | **Scan** | ✅ Full | Range scans with filters |
 | **Multi** | ✅ Full | Batch operations (Get/Put/Delete) |
+| **CheckAndMutate** | ⚠️ Non-Atomic | See [Atomicity Limitations](#atomicity-limitations) |
+| **Increment/Append** | ⚠️ Non-Atomic | See [Atomicity Limitations](#atomicity-limitations) |
 | **Meta Table** | ✅ Emulated | Table discovery and region info |
 | **Admin Operations** | ✅ Full | CreateTable, DeleteTable, DisableTable, EnableTable, GetTableDescriptors |
 | **Security** | ✅ Full | SASL/GSSAPI authentication |
@@ -42,6 +44,80 @@ Fluss CAPE provides HBase 2.x/3.x protocol compatibility for:
 2. **Primary Key Required** - All Fluss tables must have primary keys
 3. **Column Families** - Mapped to Fluss column groups (optional)
 4. **No Compaction Control** - Compaction managed by Fluss
+5. **⚠️ No Atomic Conditional Operations** - See [Atomicity Limitations](#atomicity-limitations) below
+
+### Atomicity Limitations
+
+**CRITICAL**: CheckAndMutate, Increment, and Append operations are **NOT fully atomic** in CAPE due to Fluss storage limitations.
+
+#### The Problem
+
+HBase's CheckAndMutate guarantees atomicity through a single atomic operation:
+```
+ATOMIC { check_condition() AND mutate() }
+```
+
+CAPE implements this as **three separate steps**:
+1. READ - lookup current value
+2. CHECK - evaluate condition  
+3. WRITE - upsert new value if condition met
+
+**Race condition window** exists between steps 1 and 3, where another client can modify the row.
+
+#### Impact
+
+| Operation | Risk | Example |
+|-----------|------|---------|
+| **CheckAndMutate** | Lost updates | Two clients check-and-update same counter simultaneously → one update lost |
+| **Increment** | Incorrect final value | Concurrent increments may produce wrong sum |
+| **Append** | Data loss | Concurrent appends may overwrite each other |
+
+#### Why This Happens
+
+Fluss KV storage does **not** support:
+- Transactions (BEGIN/COMMIT/ROLLBACK)
+- Compare-and-swap (CAS) operations
+- Conditional atomic updates
+
+This is an architectural limitation of the underlying storage layer.
+
+#### Recommendations
+
+For **non-critical** use cases (e.g., caching, approximate counters):
+- ✅ Safe to use CheckAndMutate/Increment/Append
+- ✅ Accept eventual consistency
+
+For **critical** use cases (e.g., financial transactions, strict counters):
+- ❌ Do NOT use CheckAndMutate/Increment/Append
+- ✅ Use external locking (e.g., ZooKeeper, Redis)
+- ✅ Implement optimistic versioning at application layer
+- ✅ Use idempotent operations with retry logic
+
+#### Example Workaround
+
+```java
+// Instead of CheckAndMutate (non-atomic)
+table.checkAndMutate(row, family)
+    .qualifier(qual)
+    .ifEquals(oldValue)
+    .thenPut(newPut);
+
+// Use external locking (atomic)
+Lock lock = lockService.acquire("row:" + rowKey);
+try {
+    Get get = new Get(row);
+    Result result = table.get(get);
+    if (matches(result, condition)) {
+        Put put = new Put(row);
+        // ... build put ...
+        table.put(put);
+    }
+} finally {
+    lock.release();
+}
+```
+
+For more details, see inline documentation in `CheckAndMutateExecutor.java`.
 
 ---
 

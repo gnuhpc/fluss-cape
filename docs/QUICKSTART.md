@@ -155,12 +155,36 @@ ZRANGE leaderboard 0 -1 WITHSCORES
 ### PostgreSQL
 
 ```bash
-psql "host=localhost port=5432 dbname=default user=postgres"
+psql -h localhost -p 5432 -U fluss -d default
 ```
 
 ```sql
-SELECT version();
-SELECT * FROM information_schema.tables LIMIT 5;
+-- Create table (note: table name must include database prefix)
+CREATE TABLE default.employees (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100),
+    age INTEGER,
+    email VARCHAR(100)
+);
+
+-- Insert data
+INSERT INTO default.employees (id, name, age, email) VALUES (1, 'Alice', 30, 'alice@example.com');
+INSERT INTO default.employees (id, name, age, email) VALUES (2, 'Bob', 25, 'bob@example.com');
+
+-- Query all data
+SELECT * FROM default.employees;
+
+-- Query with WHERE clause (only equality predicates supported)
+SELECT * FROM default.employees WHERE id = 1;
+
+-- Update data
+UPDATE default.employees SET age = 31 WHERE id = 1;
+
+-- Delete data
+DELETE FROM default.employees WHERE id = 2;
+
+-- Drop table
+DROP TABLE default.employees;
 ```
 
 ### Kafka
@@ -172,7 +196,7 @@ kafka-topics.sh --bootstrap-server localhost:9092 \
 
 # Produce
 echo "hello cape" | kafka-console-producer.sh \
-  --broker-list localhost:9092 --topic demo
+  --bootstrap-server localhost:9092 --topic demo
 
 # Consume
 kafka-console-consumer.sh --bootstrap-server localhost:9092 \

@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.expiration.ExpirationManager;
 import org.gnuhpc.fluss.cape.redis.protocol.RedisCommand;
@@ -190,7 +191,7 @@ public class HashCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> results = new ArrayList<>();
         for (RedisSingleTableAdapter.KeyValue kv : kvList) {
-            results.add(kv.subKey.getBytes());
+            results.add(kv.subKey.getBytes(StandardCharsets.UTF_8));
             results.add(kv.value);
         }
 
@@ -212,7 +213,7 @@ public class HashCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> results = new ArrayList<>();
         for (RedisSingleTableAdapter.KeyValue kv : kvList) {
-            results.add(kv.subKey.getBytes());
+            results.add(kv.subKey.getBytes(StandardCharsets.UTF_8));
         }
 
         return RedisResponse.bytesArray(results);
@@ -321,19 +322,7 @@ public class HashCommandExecutor implements RedisCommandExecutor {
             return RedisResponse.error("ERR value is not an integer or out of range");
         }
 
-        byte[] currentBytes = adapter.getByCompositeKey(key, field);
-        long currentValue = 0;
-        
-        if (currentBytes != null) {
-            try {
-                currentValue = Long.parseLong(new String(currentBytes));
-            } catch (NumberFormatException e) {
-                return RedisResponse.error("ERR hash value is not an integer");
-            }
-        }
-
-        long newValue = currentValue + increment;
-        adapter.setByCompositeKey(key, REDIS_TYPE, field, String.valueOf(newValue).getBytes(), null);
+        long newValue = adapter.hincrBy(key, field, increment);
 
         return RedisResponse.integer(newValue);
     }
@@ -369,9 +358,9 @@ public class HashCommandExecutor implements RedisCommandExecutor {
 
         double newValue = currentValue + increment;
         String result = String.valueOf(newValue);
-        adapter.setByCompositeKey(key, REDIS_TYPE, field, result.getBytes(), null);
+        adapter.setByCompositeKey(key, REDIS_TYPE, field, result.getBytes(StandardCharsets.UTF_8), null);
 
-        return RedisResponse.bulkString(result.getBytes());
+        return RedisResponse.bulkString(result.getBytes(StandardCharsets.UTF_8));
     }
 
     private RedisMessage executeHRandField(RedisCommand command) throws Exception {
@@ -419,17 +408,17 @@ public class HashCommandExecutor implements RedisCommandExecutor {
         if (count == 1) {
             RedisSingleTableAdapter.KeyValue randomKv = kvList.get(random.nextInt(kvList.size()));
             if (withValues) {
-                results.add(randomKv.subKey.getBytes());
+                results.add(randomKv.subKey.getBytes(StandardCharsets.UTF_8));
                 results.add(randomKv.value);
                 return RedisResponse.bytesArray(results);
             } else {
-                return RedisResponse.bulkString(randomKv.subKey.getBytes());
+                return RedisResponse.bulkString(randomKv.subKey.getBytes(StandardCharsets.UTF_8));
             }
         } else {
             int absCount = Math.abs(count);
             for (int i = 0; i < absCount; i++) {
                 RedisSingleTableAdapter.KeyValue randomKv = kvList.get(random.nextInt(kvList.size()));
-                results.add(randomKv.subKey.getBytes());
+                results.add(randomKv.subKey.getBytes(StandardCharsets.UTF_8));
                 if (withValues) {
                     results.add(randomKv.value);
                 }
@@ -447,7 +436,7 @@ public class HashCommandExecutor implements RedisCommandExecutor {
         
         if (expirationManager.checkAndDeleteIfExpired(key)) {
             List<byte[]> emptyResult = new ArrayList<>();
-            emptyResult.add("0".getBytes());
+            emptyResult.add("0".getBytes(StandardCharsets.UTF_8));
             emptyResult.add(new byte[0]);
             return RedisResponse.bytesArray(emptyResult);
         }
@@ -463,12 +452,12 @@ public class HashCommandExecutor implements RedisCommandExecutor {
 
         List<byte[]> fieldsAndValues = new ArrayList<>();
         for (RedisSingleTableAdapter.KeyValue kv : kvList) {
-            fieldsAndValues.add(kv.subKey.getBytes());
+            fieldsAndValues.add(kv.subKey.getBytes(StandardCharsets.UTF_8));
             fieldsAndValues.add(kv.value);
         }
 
         List<RedisMessage> result = new ArrayList<>();
-        result.add(RedisResponse.bulkString("0".getBytes()));
+        result.add(RedisResponse.bulkString("0".getBytes(StandardCharsets.UTF_8)));
         result.add(RedisResponse.bytesArray(fieldsAndValues));
 
         return RedisResponse.array(result);

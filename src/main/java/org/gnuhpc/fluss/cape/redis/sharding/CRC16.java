@@ -17,6 +17,8 @@
 
 package org.gnuhpc.fluss.cape.redis.sharding;
 
+import java.nio.charset.StandardCharsets;
+
 public class CRC16 {
 
     private static final int[] CRC16_TABLE = new int[256];
@@ -40,6 +42,6 @@ public class CRC16 {
     }
 
     public static int hash(String key) {
-        return hash(key.getBytes());
+        return hash(key.getBytes(StandardCharsets.UTF_8));
     }
 }

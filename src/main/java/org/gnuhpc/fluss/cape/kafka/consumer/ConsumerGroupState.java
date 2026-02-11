@@ -27,6 +27,39 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * Tracks consumer group membership and assignment state.
+ *
+ * <h3>⚠️ CONCURRENCY LIMITATION</h3>
+ * <ul>
+ *   <li>State fields ({@code state}, protocol info, leader, generation, counters, assignments) are
+ *   guarded by {@link #groupLock}, but membership data is a {@link ConcurrentHashMap} accessed both
+ *   with and without the lock.</li>
+ *   <li>Read-only accessors such as {@link #getMembers()}, {@link #getMemberCount()}, and
+ *   {@link #getMember(String)} do not take {@link #groupLock}, so callers can observe partial updates
+ *   during concurrent join/leave/rebalance operations.</li>
+ *   <li>Assignment map is a plain {@link HashMap} protected only by {@link #groupLock}; callers must
+ *   not retain references and mutate them outside the lock.</li>
+ *   <li>There is no volatile fencing between threads that read members directly and threads that
+ *   update state under the lock; ordering between membership changes and generation/state changes is
+ *   not guaranteed.</li>
+ * </ul>
+ *
+ * <p>Operational implications:</p>
+ * <ul>
+ *   <li>Concurrent join/leave events may return stale or intermediate membership views to callers.</li>
+ *   <li>Rebalance coordination relies on caller-side sequencing rather than strict in-class locking.</li>
+ *   <li>Assignment snapshots should be copied by callers before use to avoid visibility races.</li>
+ * </ul>
+ *
+ * <p>Future work:</p>
+ * <ol>
+ *   <li>Guard all membership reads with {@link #groupLock} or return immutable snapshots built under
+ *   the lock.</li>
+ *   <li>Consider encapsulating membership mutations to avoid mixed locked/unlocked access.</li>
+ *   <li>Make assignment storage thread-safe (e.g., {@code ConcurrentHashMap}) or always clone on read.</li>
+ * </ol>
+ */
 public class ConsumerGroupState {
     private final String groupId;
     private final Lock groupLock = new ReentrantLock();
@@ -83,19 +116,39 @@ public class ConsumerGroupState {
     }
     
     public String getProtocolType() {
-        return protocolType;
+        groupLock.lock();
+        try {
+            return protocolType;
+        } finally {
+            groupLock.unlock();
+        }
     }
     
     public void setProtocolType(String protocolType) {
-        this.protocolType = protocolType;
+        groupLock.lock();
+        try {
+            this.protocolType = protocolType;
+        } finally {
+            groupLock.unlock();
+        }
     }
     
     public String getProtocolName() {
-        return protocolName;
+        groupLock.lock();
+        try {
+            return protocolName;
+        } finally {
+            groupLock.unlock();
+        }
     }
     
     public void setProtocolName(String protocolName) {
-        this.protocolName = protocolName;
+        groupLock.lock();
+        try {
+            this.protocolName = protocolName;
+        } finally {
+            groupLock.unlock();
+        }
     }
     
     public String getLeaderId() {

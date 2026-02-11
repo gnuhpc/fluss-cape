@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.protocol.RedisCommand;
 import org.gnuhpc.fluss.cape.redis.protocol.RedisResponse;

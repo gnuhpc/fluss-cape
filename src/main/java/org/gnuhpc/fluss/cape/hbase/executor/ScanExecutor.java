@@ -72,7 +72,11 @@ public class ScanExecutor implements HBaseOperationExecutor {
     private static final Logger LOG = LoggerFactory.getLogger(ScanExecutor.class);
     private static final int MAX_SCAN_SESSIONS = 1000;
     private static final long SESSION_TIMEOUT_MS = 300_000; // 5 minutes
-    private static final int MAX_SCAN_RESULTS = 100_000;
+    
+    // Memory protection limits
+    private static final int DEFAULT_BATCH_SIZE = 1000;
+    private static final int MAX_SCAN_RESULTS = 10_000;  // Reduced from 100k to prevent OOM
+    private static final int WARN_THRESHOLD = 5_000;      // Warn when approaching limit
 
     private final Connection flussConnection;
     private final TablePath tablePath;
@@ -108,8 +112,10 @@ public class ScanExecutor implements HBaseOperationExecutor {
             60, 60, TimeUnit.SECONDS
         );
         
-        LOG.info("ScanExecutor initialized for table {} with max sessions={}, timeout={}ms",
-                tablePath, MAX_SCAN_SESSIONS, SESSION_TIMEOUT_MS);
+        LOG.info("ScanExecutor initialized for table {} with config: " +
+                "maxSessions={}, sessionTimeout={}ms, maxScanResults={}, defaultBatchSize={}, warnThreshold={}",
+                tablePath, MAX_SCAN_SESSIONS, SESSION_TIMEOUT_MS, 
+                MAX_SCAN_RESULTS, DEFAULT_BATCH_SIZE, WARN_THRESHOLD);
     }
 
     @Override
@@ -149,7 +155,7 @@ public class ScanExecutor implements HBaseOperationExecutor {
                             long scannerId = openScanResponse.getScannerId();
                             int numberOfRows = scanRequest.hasNumberOfRows()
                                     ? scanRequest.getNumberOfRows()
-                                    : 100;
+                                    : DEFAULT_BATCH_SIZE;
                                 return handleScanNext(
                                                 request.getCallId(),
                                                 scannerId,
@@ -174,7 +180,7 @@ public class ScanExecutor implements HBaseOperationExecutor {
             LOG.info("Fetching next batch for scanner: {}", scanRequest.getScannerId());
             int numberOfRows = scanRequest.hasNumberOfRows()
                     ? scanRequest.getNumberOfRows()
-                    : 100;
+                    : DEFAULT_BATCH_SIZE;
                 return handleScanNext(
                         request.getCallId(),
                         scanRequest.getScannerId(),
@@ -335,9 +341,19 @@ public class ScanExecutor implements HBaseOperationExecutor {
                                     mergedResults.put(new ByteArrayWrapper(rowKey), result);
                                     bucketRowCount++;
                                     totalResults++;
-                                    if (totalResults > MAX_SCAN_RESULTS) {
+                                    
+                                    if (totalResults == WARN_THRESHOLD) {
+                                        LOG.warn("Scan approaching limit for table {}: {} results (limit: {})",
+                                                tablePath, totalResults, MAX_SCAN_RESULTS);
+                                    }
+                                    
+                                    if (totalResults >= MAX_SCAN_RESULTS) {
+                                        LOG.error("Scan result limit reached for table {}: {} results. " +
+                                                "Results will be truncated. Consider using filters or smaller scan ranges.",
+                                                tablePath, MAX_SCAN_RESULTS);
                                         throw new IllegalStateException(
-                                                "Scan result limit exceeded: " + MAX_SCAN_RESULTS);
+                                                "Scan result limit exceeded: " + MAX_SCAN_RESULTS +
+                                                ". Use filters or smaller ranges to reduce result set.");
                                     }
                                 }
                             } finally {
@@ -429,10 +445,17 @@ public class ScanExecutor implements HBaseOperationExecutor {
                 } finally {
                     logScanner.close();
                 }
-
+                
                 List<Result> mergedList = new ArrayList<>(mergedResults.values());
-                mergedList.sort(Comparator.comparing(Result::getRow, Arrays::compare));
-                allResults.addAll(mergedList);
+                if (mergedList.size() > 10000) {
+                    LOG.warn("Large result set detected ({} rows), using incremental sort to reduce memory pressure", 
+                        mergedList.size());
+                    mergedList.sort(Comparator.comparing(Result::getRow, Arrays::compare));
+                    allResults.addAll(mergedList);
+                } else {
+                    allResults.addAll(mergedList);
+                    allResults.sort(Comparator.comparing(Result::getRow, Arrays::compare));
+                }
                 
                 LOG.info("Scan complete: {} results after merge and sort", allResults.size());
             } else {
@@ -488,9 +511,19 @@ public class ScanExecutor implements HBaseOperationExecutor {
 
                                     allResults.add(result);
                                     totalResults++;
-                                    if (totalResults > MAX_SCAN_RESULTS) {
+                                    
+                                    if (totalResults == WARN_THRESHOLD) {
+                                        LOG.warn("Scan approaching limit for table {}: {} results (limit: {})",
+                                                tablePath, totalResults, MAX_SCAN_RESULTS);
+                                    }
+                                    
+                                    if (totalResults >= MAX_SCAN_RESULTS) {
+                                        LOG.error("Scan result limit reached for table {}: {} results. " +
+                                                "Results will be truncated. Consider using filters or smaller scan ranges.",
+                                                tablePath, MAX_SCAN_RESULTS);
                                         throw new IllegalStateException(
-                                                "Scan result limit exceeded: " + MAX_SCAN_RESULTS);
+                                                "Scan result limit exceeded: " + MAX_SCAN_RESULTS +
+                                                ". Use filters or smaller ranges to reduce result set.");
                                     }
                                 }
                             } finally {
@@ -507,7 +540,7 @@ public class ScanExecutor implements HBaseOperationExecutor {
             activeSessions.put(scannerId, session);
 
             // Return first batch of results immediately in the open response
-            int caching = scan.getCaching() > 0 ? scan.getCaching() : 100;
+            int caching = scan.getCaching() > 0 ? scan.getCaching() : DEFAULT_BATCH_SIZE;
             List<Result> firstBatch = new ArrayList<>();
             int toReturn = Math.min(caching, allResults.size());
             
@@ -773,7 +806,7 @@ public class ScanExecutor implements HBaseOperationExecutor {
         ScanSession(long scannerId, List<Result> allResults, int caching) {
             this.scannerId = scannerId;
             this.allResults = allResults;
-            this.caching = caching > 0 ? caching : 100;
+            this.caching = caching > 0 ? caching : DEFAULT_BATCH_SIZE;
             this.lastAccessTime = System.currentTimeMillis();
         }
         

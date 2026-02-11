@@ -17,6 +17,8 @@
 
 package org.gnuhpc.fluss.cape.pg.server;
 
+import org.gnuhpc.fluss.cape.common.configuration.CapeConfig;
+
 public final class PgServerConfig {
 
     private final boolean enabled;
@@ -52,6 +54,17 @@ public final class PgServerConfig {
         String authUser = System.getProperty("pg.auth.user");
         String authPassword = System.getProperty("pg.auth.password");
         String database = System.getProperty("pg.database", "default");
+        return new PgServerConfig(enabled, bindAddress, port, authMode, authUser, authPassword, database);
+    }
+
+    public static PgServerConfig fromCapeConfig(CapeConfig capeConfig) {
+        boolean enabled = capeConfig.isPgEnabled();
+        String bindAddress = capeConfig.getPgBindAddress();
+        int port = capeConfig.getPgPort();
+        PgAuthMode authMode = PgAuthMode.fromString(capeConfig.getPgAuthMode());
+        String authUser = capeConfig.getPgAuthUser();
+        String authPassword = capeConfig.getPgAuthPassword();
+        String database = capeConfig.getPgDatabase();
         return new PgServerConfig(enabled, bindAddress, port, authMode, authUser, authPassword, database);
     }
 

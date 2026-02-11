@@ -587,7 +587,7 @@ hbase org.apache.hadoop.hbase.mapreduce.Import users /export/users
 - ✅ RESP protocol (all clients compatible)
 - ❌ Lua scripts (not supported)
 - ✅ Pub/Sub (full support with pattern matching)
-- ❌ Transactions (MULTI/EXEC not yet implemented)
+- ✅ Transactions (MULTI/EXEC with distributed support across instances)
 
 **Data Migration:**
 ```bash

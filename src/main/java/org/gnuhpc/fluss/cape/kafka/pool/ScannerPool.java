@@ -35,6 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class ScannerPool implements AutoCloseable {
@@ -74,17 +75,43 @@ public class ScannerPool implements AutoCloseable {
         
         LOG.info("ScannerPool initialized: maxSize={}, idleTimeout={}", maxPoolSize, idleTimeout);
     }
-    
-    public LogScanner getOrCreate(String topic, int partition) {
+
+    public class Lease implements AutoCloseable {
+        private final PooledScanner pooled;
+        private final ScannerKey key;
+        private boolean invalidated = false;
+
+        private Lease(PooledScanner pooled, ScannerKey key) {
+            this.pooled = pooled;
+            this.key = key;
+        }
+
+        public LogScanner scanner() {
+            return pooled.getScanner();
+        }
+
+        public void invalidate() {
+            this.invalidated = true;
+        }
+
+        @Override
+        public void close() {
+            if (invalidated) {
+                ScannerPool.this.invalidate(key.topic, key.partition);
+            } else {
+                pooled.release();
+            }
+        }
+    }
+
+    public Lease acquire(String topic, int partition) throws InterruptedException {
         if (closed) {
             throw new IllegalStateException("ScannerPool is closed");
         }
         
         ScannerKey key = new ScannerKey(topic, partition);
-        
         PooledScanner pooled = scanners.compute(key, (k, existing) -> {
             if (existing != null && existing.isHealthy()) {
-                existing.updateLastUsed();
                 return existing;
             }
             
@@ -103,8 +130,7 @@ public class ScannerPool implements AutoCloseable {
                 TablePath tablePath = tablePathResolver.resolve(topic);
                 Table table = flussConnection.getTable(tablePath);
                 LogScanner scanner = table.newScan().createLogScanner();
-                scanner.subscribe(partition, 0L);
-                
+                // Initial subscription is handled by the caller or during acquire if needed
                 LOG.debug("Created new scanner for {}-{}", topic, partition);
                 return new PooledScanner(scanner, Instant.now(), 0L);
             } catch (Exception e) {
@@ -113,7 +139,23 @@ public class ScannerPool implements AutoCloseable {
             }
         });
         
-        return pooled.getScanner();
+        if (!pooled.acquire(30, TimeUnit.SECONDS)) {
+            throw new RuntimeException("Timed out waiting for scanner lease for " + topic + "-" + partition);
+        }
+        
+        pooled.updateLastUsed();
+        return new Lease(pooled, key);
+    }
+    
+    @Deprecated
+    public LogScanner getOrCreate(String topic, int partition) {
+        // Keeping for temporary compatibility if needed, but should be removed
+        try {
+            return acquire(topic, partition).scanner();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
     
     public boolean needsReposition(String topic, int partition, long requestedOffset) {
@@ -143,6 +185,8 @@ public class ScannerPool implements AutoCloseable {
                 LOG.debug("Invalidated scanner for {}-{}", topic, partition);
             } catch (Exception e) {
                 LOG.warn("Error closing scanner during invalidation for {}-{}", topic, partition, e);
+            } finally {
+                pooled.releaseIfHeld();
             }
         }
     }
@@ -243,6 +287,7 @@ public class ScannerPool implements AutoCloseable {
         private volatile Instant lastUsed;
         private final AtomicLong useCount;
         private volatile long expectedNextOffset;
+        private final Semaphore semaphore;
         
         PooledScanner(LogScanner scanner, Instant created, long initialOffset) {
             this.scanner = scanner;
@@ -250,8 +295,25 @@ public class ScannerPool implements AutoCloseable {
             this.lastUsed = created;
             this.useCount = new AtomicLong(0);
             this.expectedNextOffset = initialOffset;
+            this.semaphore = new Semaphore(1);
         }
         
+        boolean acquire(long timeout, TimeUnit unit) throws InterruptedException {
+            return semaphore.tryAcquire(timeout, unit);
+        }
+
+        void release() {
+            semaphore.release();
+        }
+
+        void releaseIfHeld() {
+            if (semaphore.tryAcquire()) {
+                semaphore.release();
+            } else {
+                semaphore.release();
+            }
+        }
+
         LogScanner getScanner() {
             return scanner;
         }

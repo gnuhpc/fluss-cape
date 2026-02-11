@@ -49,16 +49,23 @@ import org.slf4j.LoggerFactory;
 public final class PgTableScanner {
 
     private static final Logger LOG = LoggerFactory.getLogger(PgTableScanner.class);
+    private static final int MAX_SCAN_RESULTS = 10_000;
+    private static final int WARN_THRESHOLD = 5_000;
 
     private PgTableScanner() {
     }
 
     public static List<InternalRow> scanTable(Connection connection, Table table, 
             List<String> projectedColumns, int limit) throws Exception {
+        if (limit > MAX_SCAN_RESULTS) {
+            throw new IllegalArgumentException(
+                    "Query limit exceeds max scan results: " + limit + " (max: " + MAX_SCAN_RESULTS + ")");
+        }
         TableInfo tableInfo = table.getTableInfo();
         TablePath tablePath = tableInfo.getTablePath();
         long tableId = tableInfo.getTableId();
         int numBuckets = tableInfo.getNumBuckets();
+        int effectiveLimit = limit > 0 ? limit : MAX_SCAN_RESULTS;
         
         Admin admin = connection.getAdmin();
         KvSnapshots kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
@@ -84,10 +91,10 @@ public final class PgTableScanner {
         
         if (hasSnapshot) {
             allRows = scanWithHybridStrategy(connection, table, kvSnapshots, bucketIds, tableId, 
-                projectedColumns, limit, admin, tablePath);
+                projectedColumns, effectiveLimit, limit > 0, admin, tablePath);
         } else {
             allRows = scanWithLimitStrategy(table, bucketIds, tableId, 
-                projectedColumns, limit);
+                projectedColumns, effectiveLimit, limit > 0);
         }
         
         LOG.info("PgTableScanner complete: {} rows returned", allRows.size());
@@ -96,13 +103,14 @@ public final class PgTableScanner {
     
     private static List<InternalRow> scanWithHybridStrategy(
             Connection connection, Table table, KvSnapshots kvSnapshots, List<Integer> bucketIds,
-            long tableId, List<String> projectedColumns, int limit,
+            long tableId, List<String> projectedColumns, int limit, boolean clientHasLimit,
             Admin admin, TablePath tablePath) throws Exception {
         
         TableInfo tableInfo = table.getTableInfo();
         RowType rowType = tableInfo.getRowType();
         List<String> primaryKeys = tableInfo.getPrimaryKeys();
         Map<ByteArrayWrapper, InternalRow> mergedResults = new HashMap<>();
+        boolean warned = false;
         Map<Integer, Long> endOffsets = new HashMap<>();
         Map<Integer, OptionalLong> snapshotOffsets = new HashMap<>();
         
@@ -153,9 +161,19 @@ public final class PgTableScanner {
                             byte[] rowKey = extractRowKey(row, rowType, primaryKeys);
                             mergedResults.put(new ByteArrayWrapper(rowKey), row);
                             bucketRowCount++;
-                            
-                            if (limit > 0 && mergedResults.size() >= limit) {
-                                return new ArrayList<>(mergedResults.values());
+
+                            int currentSize = mergedResults.size();
+                            if (!warned && currentSize >= WARN_THRESHOLD) {
+                                LOG.warn("PgTableScanner approaching scan limit: {} rows", currentSize);
+                                warned = true;
+                            }
+                            if (currentSize >= limit) {
+                                if (clientHasLimit) {
+                                    return new ArrayList<>(mergedResults.values());
+                                }
+                                throw new IllegalStateException(
+                                        "Scan result limit exceeded: " + MAX_SCAN_RESULTS
+                                                + ". Add LIMIT to reduce result size.");
                             }
                         }
                     } finally {
@@ -272,8 +290,18 @@ public final class PgTableScanner {
                             recordsInBatch++;
                             totalLogRecords++;
                             
-                            if (limit > 0 && mergedResults.size() >= limit) {
-                                return new ArrayList<>(mergedResults.values());
+                            int currentSize = mergedResults.size();
+                            if (!warned && currentSize >= WARN_THRESHOLD) {
+                                LOG.warn("PgTableScanner approaching scan limit: {} rows", currentSize);
+                                warned = true;
+                            }
+                            if (currentSize >= limit) {
+                                if (clientHasLimit) {
+                                    return new ArrayList<>(mergedResults.values());
+                                }
+                                throw new IllegalStateException(
+                                        "Scan result limit exceeded: " + MAX_SCAN_RESULTS
+                                                + ". Add LIMIT to reduce result size.");
                             }
                         }
                     }
@@ -295,11 +323,12 @@ public final class PgTableScanner {
     
     private static List<InternalRow> scanWithLimitStrategy(
             Table table, List<Integer> bucketIds, long tableId,
-            List<String> projectedColumns, int limit) throws Exception {
+            List<String> projectedColumns, int limit, boolean clientHasLimit) throws Exception {
         
         LOG.warn("No snapshots available. Falling back to limit scan.");
         
         List<InternalRow> allRows = new ArrayList<>();
+        boolean warned = false;
         
         for (int bucketId : bucketIds) {
             TableBucket tableBucket = new TableBucket(tableId, bucketId);
@@ -323,8 +352,18 @@ public final class PgTableScanner {
                     try {
                         while (iterator.hasNext()) {
                             allRows.add(iterator.next());
-                            if (limit > 0 && allRows.size() >= limit) {
-                                return allRows;
+                            int currentSize = allRows.size();
+                            if (!warned && currentSize >= WARN_THRESHOLD) {
+                                LOG.warn("PgTableScanner approaching scan limit: {} rows", currentSize);
+                                warned = true;
+                            }
+                            if (currentSize >= limit) {
+                                if (clientHasLimit) {
+                                    return allRows;
+                                }
+                                throw new IllegalStateException(
+                                        "Scan result limit exceeded: " + MAX_SCAN_RESULTS
+                                                + ". Add LIMIT to reduce result size.");
                             }
                         }
                     } finally {

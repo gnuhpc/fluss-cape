@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.lookup.Lookuper;

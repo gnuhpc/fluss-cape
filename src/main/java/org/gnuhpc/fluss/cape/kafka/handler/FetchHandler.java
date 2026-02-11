@@ -118,55 +118,58 @@ public class FetchHandler {
                                         new FetchResponseData.PartitionData()
                                             .setPartitionIndex(partition);
                                     
-                                    try {
-                                        LOG.info("Fetching from {}-{} at offset {}", topicName, partition, fetchOffset);
-                                        LogScanner scanner = scannerPool.getOrCreate(topicName, partition);
-                                        scanner.subscribe(partition, fetchOffset);
-                                        LOG.info("Scanner subscribed to {}-{} at offset {}", topicName, partition, fetchOffset);
-                                        
-                                        MemoryRecordsBuilder recordsBuilder = MemoryRecords.builder(
-                                            ByteBuffer.allocate(1024 * 1024),
-                                            org.apache.kafka.common.compress.Compression.NONE,
-                                            TimestampType.CREATE_TIME,
-                                            fetchOffset
-                                        );
-                                        
-                                        ScanRecords scanRecords = scanner.poll(Duration.ofMillis(5));
-                                        LOG.info("Poll returned from {}-{}, hasRecords: {}", topicName, partition, scanRecords.iterator().hasNext());
-                                        long highWatermark = fetchOffset;
-                                        int recordCount = 0;
-                                        
-                                        for (ScanRecord scanRecord : scanRecords) {
-                                            RecordConverter.KafkaRecordBuilder builder = 
-                                                RecordConverter.flussRowToKafkaRecordBuilder(
-                                                    scanRecord.getRow(), 
-                                                    schema
-                                                );
+                                    try (ScannerPool.Lease lease = scannerPool.acquire(topicName, partition)) {
+                                        try {
+                                            LOG.info("Fetching from {}-{} at offset {}", topicName, partition, fetchOffset);
+                                            LogScanner scanner = lease.scanner();
+                                            scanner.subscribe(partition, fetchOffset);
+                                            LOG.info("Scanner subscribed to {}-{} at offset {}", topicName, partition, fetchOffset);
                                             
-                                            recordsBuilder.append(
-                                                builder.getTimestamp(),
-                                                builder.getKey() != null ? ByteBuffer.wrap(builder.getKey()) : null,
-                                                builder.getValue() != null ? ByteBuffer.wrap(builder.getValue()) : null,
-                                                new org.apache.kafka.common.header.Header[0]
+                                            MemoryRecordsBuilder recordsBuilder = MemoryRecords.builder(
+                                                ByteBuffer.allocate(1024 * 1024),
+                                                org.apache.kafka.common.compress.Compression.NONE,
+                                                TimestampType.CREATE_TIME,
+                                                fetchOffset
                                             );
                                             
-                                            highWatermark = scanRecord.logOffset() + 1;
-                                            recordCount++;
+                                            ScanRecords scanRecords = scanner.poll(Duration.ofMillis(5));
+                                            LOG.info("Poll returned from {}-{}, hasRecords: {}", topicName, partition, scanRecords.iterator().hasNext());
+                                            long highWatermark = fetchOffset;
+                                            int recordCount = 0;
+                                            
+                                            for (ScanRecord scanRecord : scanRecords) {
+                                                RecordConverter.KafkaRecordBuilder builder = 
+                                                    RecordConverter.flussRowToKafkaRecordBuilder(
+                                                        scanRecord.getRow(), 
+                                                        schema
+                                                    );
+                                                
+                                                recordsBuilder.append(
+                                                    builder.getTimestamp(),
+                                                    builder.getKey() != null ? ByteBuffer.wrap(builder.getKey()) : null,
+                                                    builder.getValue() != null ? ByteBuffer.wrap(builder.getValue()) : null,
+                                                    new org.apache.kafka.common.header.Header[0]
+                                                );
+                                                
+                                                highWatermark = scanRecord.logOffset() + 1;
+                                                recordCount++;
+                                            }
+                                            
+                                            partResponse
+                                                .setErrorCode(Errors.NONE.code())
+                                                .setHighWatermark(highWatermark)
+                                                .setLastStableOffset(highWatermark)
+                                                .setLogStartOffset(0L)
+                                                .setRecords(recordsBuilder.build());
+                                            
+                                            LOG.info("Fetched {} records from {}-{} at offset {}, highWatermark: {}", 
+                                                     recordCount, topicName, partition, fetchOffset, highWatermark);
+                                        } catch (Exception e) {
+                                            lease.invalidate();
+                                            throw e;
                                         }
-                                        
-                                        partResponse
-                                            .setErrorCode(Errors.NONE.code())
-                                            .setHighWatermark(highWatermark)
-                                            .setLastStableOffset(highWatermark)
-                                            .setLogStartOffset(0L)
-                                            .setRecords(recordsBuilder.build());
-                                        
-                                        LOG.info("Fetched {} records from {}-{} at offset {}, highWatermark: {}", 
-                                                 recordCount, topicName, partition, fetchOffset, highWatermark);
-                                        
                                     } catch (Exception e) {
                                         LOG.error("Error fetching from {}-{}", topicName, partition, e);
-                                        scannerPool.invalidate(topicName, partition);
                                         partResponse.setErrorCode(Errors.UNKNOWN_SERVER_ERROR.code());
                                     }
                                     

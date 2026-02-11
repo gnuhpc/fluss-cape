@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
@@ -38,6 +39,7 @@ import org.gnuhpc.fluss.cape.redis.protocol.RedisResponse;
 import org.gnuhpc.fluss.cape.redis.storage.RedisSingleTableAdapter;
 import org.gnuhpc.fluss.cape.redis.storage.RedisStorageAdapter;
 import org.gnuhpc.fluss.cape.redis.util.RedisErrorSanitizer;
+import org.gnuhpc.fluss.cape.redis.util.SimpleLRUCache;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
@@ -69,9 +71,9 @@ public class StreamCommandExecutor implements RedisCommandExecutor {
     private final Connection flussConnection;
     private final String streamDataTableName;
     private final String tombstoneTableName;
-    private final Map<String, StreamMetadata> streamMetadataCache;
-    private final Map<String, AtomicLong> streamSequenceCounters;
-    private final Map<String, Set<String>> deletedEntriesCache;
+    private final SimpleLRUCache<String, StreamMetadata> streamMetadataCache;
+    private final SimpleLRUCache<String, AtomicLong> streamSequenceCounters;
+    private final SimpleLRUCache<String, Set<String>> deletedEntriesCache;
     private final Map<String, Map<String, ConsumerGroupMetadata>> consumerGroups;
     private final String consumerGroupTableName;
     private final String pendingEntriesTableName;
@@ -82,9 +84,9 @@ public class StreamCommandExecutor implements RedisCommandExecutor {
         this.tombstoneTableName = "default.redis_stream_tombstones";
         this.consumerGroupTableName = "default.redis_consumer_groups";
         this.pendingEntriesTableName = "default.redis_pending_entries";
-        this.streamMetadataCache = new ConcurrentHashMap<>();
-        this.streamSequenceCounters = new ConcurrentHashMap<>();
-        this.deletedEntriesCache = new ConcurrentHashMap<>();
+        this.streamMetadataCache = new SimpleLRUCache<>(10000);
+        this.streamSequenceCounters = new SimpleLRUCache<>(5000);
+        this.deletedEntriesCache = new SimpleLRUCache<>(5000);
         this.consumerGroups = new ConcurrentHashMap<>();
 
         try {

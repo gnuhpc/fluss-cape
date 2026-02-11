@@ -36,25 +36,47 @@ public class RedisCommandRouter {
 
     private final Map<String, RedisCommandExecutor> executors = new ConcurrentHashMap<>();
     private TransactionCommandExecutor transactionExecutor;
+    private TransactionCommandExecutorDistributed distributedTransactionExecutor;
+    private org.gnuhpc.fluss.cape.redis.pubsub.PubSubManager pubSubManager;
 
     public void registerExecutor(String command, RedisCommandExecutor executor) {
         executors.put(command.toUpperCase(), executor);
         LOG.info("Registered Redis executor for command: {}", command);
         
-        // Cache transaction executor reference for fast lookup
         if (executor instanceof TransactionCommandExecutor) {
             this.transactionExecutor = (TransactionCommandExecutor) executor;
+        }
+        if (executor instanceof TransactionCommandExecutorDistributed) {
+            this.distributedTransactionExecutor = (TransactionCommandExecutorDistributed) executor;
+        }
+        if (executor instanceof PubSubCommandExecutor) {
+            this.pubSubManager = ((PubSubCommandExecutor) executor).getPubSubManager();
+        }
+    }
+
+    public RedisCommandExecutor getExecutor(String command) {
+        return executors.get(command.toUpperCase());
+    }
+
+    public void cleanupSubscriptions(ChannelHandlerContext ctx) {
+        if (pubSubManager != null) {
+            pubSubManager.unsubscribeAll(ctx);
         }
     }
 
     public RedisMessage route(RedisCommand command, ChannelHandlerContext ctx, BlockingOperationQueue blockingQueue) {
         String commandName = command.getCommand();
         
-        // Check if in transaction mode - queue commands if not MULTI/EXEC/DISCARD
         if (transactionExecutor != null && transactionExecutor.isInTransaction(ctx)) {
             if (!commandName.equals("EXEC") && !commandName.equals("DISCARD") && !commandName.equals("MULTI")) {
                 transactionExecutor.queueCommand(ctx, command);
                 return RedisResponse.bulkString("QUEUED");
+            }
+        }
+        
+        if (distributedTransactionExecutor != null && distributedTransactionExecutor.isInTransaction(ctx)) {
+            if (!commandName.equals("EXEC") && !commandName.equals("DISCARD") && !commandName.equals("MULTI")) {
+                return distributedTransactionExecutor.queueCommand(ctx, command);
             }
         }
         

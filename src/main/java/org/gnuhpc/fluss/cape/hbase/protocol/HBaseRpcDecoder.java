@@ -17,10 +17,10 @@
 
 package org.gnuhpc.fluss.cape.hbase.protocol;
 
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.ByteToMessageDecoder;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.CorruptedFrameException;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ByteToMessageDecoder;
+import io.netty.handler.codec.CorruptedFrameException;
 
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos;
@@ -208,8 +208,9 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
 
             byte[] responseBytes = response.toByteArray();
 
-            org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf buffer =
-                    ctx.alloc().buffer(responseBytes.length);
+            io.netty.buffer.ByteBuf buffer =
+                    ctx.alloc().buffer(responseBytes.length + LENGTH_FIELD_LENGTH);
+            buffer.writeInt(responseBytes.length);
             buffer.writeBytes(responseBytes);
 
             ctx.writeAndFlush(buffer);
@@ -262,11 +263,10 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
 
         // Parse RequestHeader using HBase's ProtobufUtil.mergeFrom()
         int headerSize = cis.readRawVarint32();
-        int offset = cis.getTotalBytesRead();
         Message.Builder headerBuilder = RPCProtos.RequestHeader.newBuilder();
         ProtobufUtil.mergeFrom(headerBuilder, cis, headerSize);
         RPCProtos.RequestHeader requestHeader = (RPCProtos.RequestHeader) headerBuilder.build();
-        offset += headerSize;
+        int offset = cis.getTotalBytesRead();
 
         int callId = requestHeader.getCallId();
         String methodName = requestHeader.getMethodName();
@@ -274,10 +274,13 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
         // Parse request parameter (varint-prefixed protobuf)
         byte[] paramBytes = null;
         if (requestHeader.hasRequestParam() && requestHeader.getRequestParam()) {
-            cis.resetSizeCounter();
             int paramSize = cis.readRawVarint32();
-            offset += cis.getTotalBytesRead();
+            offset = cis.getTotalBytesRead();
             if (paramSize > 0) {
+                if (offset + paramSize > frameBytes.length) {
+                    throw new CorruptedFrameException(
+                            "Invalid request param size: " + paramSize + " at offset " + offset);
+                }
                 paramBytes = new byte[paramSize];
                 System.arraycopy(frameBytes, offset, paramBytes, 0, paramSize);
                 offset += paramSize;
@@ -288,6 +291,10 @@ public class HBaseRpcDecoder extends ByteToMessageDecoder {
         byte[] cellBlock = null;
         if (requestHeader.hasCellBlockMeta()) {
             int cellBlockLength = requestHeader.getCellBlockMeta().getLength();
+            if (offset + cellBlockLength > frameBytes.length) {
+                throw new CorruptedFrameException(
+                        "Invalid cell block length: " + cellBlockLength + " at offset " + offset);
+            }
             cellBlock = new byte[cellBlockLength];
             System.arraycopy(frameBytes, offset, cellBlock, 0, cellBlockLength);
 

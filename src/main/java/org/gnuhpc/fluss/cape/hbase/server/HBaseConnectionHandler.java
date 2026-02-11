@@ -20,8 +20,8 @@ package org.gnuhpc.fluss.cape.hbase.server;
 import org.gnuhpc.fluss.cape.hbase.executor.HBaseRequestRouter;
 import org.gnuhpc.fluss.cape.hbase.protocol.HBaseRpcRequest;
 import org.gnuhpc.fluss.cape.hbase.protocol.HBaseRpcResponse;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.SimpleChannelInboundHandler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

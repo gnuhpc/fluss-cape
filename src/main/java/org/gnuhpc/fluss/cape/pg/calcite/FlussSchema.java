@@ -27,12 +27,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 public class FlussSchema extends AbstractSchema {
 
+    private final Connection connection;
     private final Admin admin;
     private final String database;
 
-    public FlussSchema(Admin admin, String database) {
+    public FlussSchema(Connection connection, Admin admin, String database) {
+        this.connection = connection;
         this.admin = admin;
         this.database = database;
     }
@@ -45,12 +54,11 @@ public class FlussSchema extends AbstractSchema {
             for (String tableName : tableNames) {
                 TablePath tablePath = TablePath.of(database, tableName);
                 TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-                tables.put(tableName, new FlussTable(tableInfo));
+                tables.put(tableName, new FlussTable(connection, admin, tableInfo));
             }
         } catch (Exception e) {
             throw new IllegalStateException("Failed to load Fluss schema", e);
         }
         return tables;
     }
-
 }

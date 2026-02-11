@@ -33,9 +33,23 @@ import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.apache.calcite.adapter.enumerable.EnumerableConvention;
+import org.apache.calcite.adapter.enumerable.EnumerableRules;
+import org.apache.calcite.adapter.java.JavaTypeFactory;
+import org.apache.calcite.config.Lex;
+import org.apache.calcite.interpreter.Interpreter;
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl;
+import org.apache.calcite.linq4j.Enumerable;
+import org.apache.calcite.linq4j.Enumerator;
+import org.apache.calcite.linq4j.QueryProvider;
+import org.apache.calcite.plan.Contexts;
+import org.apache.calcite.plan.ConventionTraitDef;
+import org.apache.calcite.plan.RelTraitSet;
+import org.apache.calcite.rel.RelCollationTraitDef;
+import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
+import org.apache.calcite.schema.SchemaPlus;
 import org.apache.calcite.sql.SqlBasicCall;
 import org.apache.calcite.sql.SqlDelete;
 import org.apache.calcite.sql.SqlIdentifier;
@@ -44,6 +58,7 @@ import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlLiteral;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
+import org.apache.calcite.sql.SqlOrderBy;
 import org.apache.calcite.sql.SqlSelect;
 import org.apache.calcite.sql.SqlUpdate;
 import org.apache.calcite.sql.parser.SqlParser;
@@ -52,7 +67,9 @@ import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
+import org.apache.calcite.tools.Programs;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
@@ -66,13 +83,18 @@ import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
+import org.gnuhpc.fluss.cape.pg.calcite.FlussSchema;
 import org.gnuhpc.fluss.cape.pg.executor.PgCompatStubResults;
 import org.gnuhpc.fluss.cape.pg.protocol.PgRowDescriptionBuilder;
 import org.gnuhpc.fluss.cape.pg.protocol.backend.PgBackendMessages.RowDescription;
 import org.gnuhpc.fluss.cape.pg.session.PgCopyState;
 import org.gnuhpc.fluss.cape.pg.session.PgSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class PgSqlEngine {
+
+    private static final Logger LOG = LoggerFactory.getLogger(PgSqlEngine.class);
 
     private PgSqlEngine() {
     }
@@ -92,10 +114,12 @@ public final class PgSqlEngine {
             return;
         }
         SqlNode parsed = parse(sql);
-        if (!(parsed instanceof SqlSelect
-                || parsed instanceof SqlInsert
-                || parsed instanceof SqlUpdate
-                || parsed instanceof SqlDelete)) {
+        SqlNode queryNode = (parsed instanceof SqlOrderBy) ? ((SqlOrderBy) parsed).query : parsed;
+        
+        if (!(queryNode instanceof SqlSelect
+                || queryNode instanceof SqlInsert
+                || queryNode instanceof SqlUpdate
+                || queryNode instanceof SqlDelete)) {
         throw new IllegalArgumentException("only SELECT/INSERT/UPDATE/DELETE/CREATE/DROP/ALTER supported");
         }
     }
@@ -118,19 +142,20 @@ public final class PgSqlEngine {
         }
         
         String resolvedSql = applyParameters(sql, parameters);
-        resolvedSql = stripDatabasePrefix(resolvedSql);
         SqlNode parsed = parse(resolvedSql);
-        if (parsed instanceof SqlSelect) {
-            return executeSelect(session, (SqlSelect) parsed);
+        SqlNode queryNode = (parsed instanceof SqlOrderBy) ? ((SqlOrderBy) parsed).query : parsed;
+
+        if (queryNode instanceof SqlSelect) {
+            return executeSelect(session, resolvedSql, (SqlSelect) queryNode);
         }
-        if (parsed instanceof SqlInsert) {
-            return executeInsert(session, (SqlInsert) parsed);
+        if (queryNode instanceof SqlInsert) {
+            return executeInsert(session, (SqlInsert) queryNode);
         }
-        if (parsed instanceof SqlUpdate) {
-            return executeUpdate(session, (SqlUpdate) parsed);
+        if (queryNode instanceof SqlUpdate) {
+            return executeUpdate(session, (SqlUpdate) queryNode);
         }
-        if (parsed instanceof SqlDelete) {
-            return executeDelete(session, (SqlDelete) parsed);
+        if (queryNode instanceof SqlDelete) {
+            return executeDelete(session, (SqlDelete) queryNode);
         }
         throw new IllegalArgumentException("only SELECT/INSERT/UPDATE/DELETE/CREATE/DROP/ALTER supported");
     }
@@ -213,7 +238,8 @@ public final class PgSqlEngine {
         String data = copyState.getData();
         
         UpsertWriter writer = table.newUpsert().createWriter();
-        for (String rawLine : data.split("\\n")) {
+        try {
+            for (String rawLine : data.split("\\n")) {
                 String line = rawLine.endsWith("\r") ? rawLine.substring(0, rawLine.length() - 1) : rawLine;
                 if (line.isEmpty()) {
                     continue;
@@ -229,59 +255,104 @@ public final class PgSqlEngine {
                 writer.upsert(row).join();
                 count += 1;
             }
+        } finally {
+            writer.flush();
+        }
         return count;
     }
 
-    private static PgExecutionResult executeSelect(PgSession session, SqlSelect select) throws Exception {
+    private static PgExecutionResult executeSelect(PgSession session, String sql, SqlSelect select) throws Exception {
         if (select.getFrom() == null) {
             return executeLiteralSelect(select);
         }
-        if (!(select.getFrom() instanceof SqlIdentifier)) {
-            throw new IllegalArgumentException("only simple table selects supported");
-        }
-        SqlIdentifier identifier = (SqlIdentifier) select.getFrom();
-        String tableName = identifier.names.get(identifier.names.size() - 1);
-        TablePath tablePath = resolveTablePath(session, identifier.toString().toLowerCase());
-        TableInfo tableInfo = getTableInfo(session, tablePath);
-        RowType rowType = tableInfo.getRowType();
-        List<String> selectedColumns = resolveSelectedColumns(select.getSelectList(), rowType);
-        Map<String, SqlLiteral> predicates = new HashMap<>();
-        if (select.getWhere() != null && !extractPredicates(select.getWhere(), predicates)) {
-            throw new IllegalArgumentException("only equality predicates supported");
-        }
-        List<String> primaryKeys = tableInfo.getPrimaryKeys();
-        
-        boolean canUseLookup = !primaryKeys.isEmpty() 
-                && predicates.keySet().containsAll(primaryKeys);
-        
+
         Connection connection = session.getFlussConnection();
-        Table table = connection.getTable(tablePath);
-        List<Object[]> rows = new ArrayList<>();
-        InternalRow.FieldGetter[] getters = InternalRow.createFieldGetters(rowType);
-        
-        if (canUseLookup) {
-            GenericRow keyRow = new GenericRow(rowType.getFieldCount());
-            for (String key : primaryKeys) {
-                int index = fieldIndex(rowType, key);
-                SqlLiteral literal = predicates.get(key);
-                keyRow.setField(index, convertLiteral(literal, rowType.getFields().get(index).getType()));
-            }
-            Lookuper lookuper = table.newLookup().createLookuper();
-            LookupResult lookupResult = lookuper.lookup(keyRow).join();
-            if (lookupResult != null && lookupResult.getRowList() != null) {
-                    for (InternalRow row : lookupResult.getRowList()) {
-                    rows.add(extractRow(rowType, getters, selectedColumns, row));
+        Admin admin = session.getFlussAdmin();
+        String database = session.getDatabase() == null ? "default" : session.getDatabase();
+
+        if (select.getFrom() instanceof SqlIdentifier && select.getWhere() != null) {
+            SqlIdentifier identifier = (SqlIdentifier) select.getFrom();
+            TablePath tablePath = resolveTablePath(session, identifier.toString().toLowerCase());
+            TableInfo tableInfo = getTableInfo(session, tablePath);
+            RowType rowType = tableInfo.getRowType();
+            List<String> primaryKeys = tableInfo.getPrimaryKeys();
+            Map<String, SqlLiteral> predicates = new HashMap<>();
+            
+            if (!primaryKeys.isEmpty() && extractPredicates(select.getWhere(), predicates)) {
+                if (predicates.keySet().containsAll(primaryKeys)) {
+                    LOG.info("Using optimized Lookuper path for PK query on {}", tablePath);
+                    List<String> selectedColumns = resolveSelectedColumns(select.getSelectList(), rowType);
+                    InternalRow.FieldGetter[] getters = InternalRow.createFieldGetters(rowType);
+                    
+                    GenericRow keyRow = new GenericRow(rowType.getFieldCount());
+                    for (String key : primaryKeys) {
+                        int index = fieldIndex(rowType, key);
+                        SqlLiteral literal = predicates.get(key);
+                        keyRow.setField(index, convertLiteral(literal, rowType.getFields().get(index).getType()));
+                    }
+                    
+                    Table table = connection.getTable(tablePath);
+                    Lookuper lookuper = table.newLookup().createLookuper();
+                    LookupResult lookupResult = lookuper.lookup(keyRow).join();
+                    List<Object[]> rows = new ArrayList<>();
+                    if (lookupResult != null && lookupResult.getRowList() != null) {
+                        for (InternalRow row : lookupResult.getRowList()) {
+                            rows.add(extractRow(rowType, getters, selectedColumns, row));
+                        }
+                    }
+                    
+                    RowDescription description = PgRowDescriptionBuilder.fromRowType(rowType, selectedColumns);
+                    return PgExecutionResult.query(new PgQueryResult(description, rows), "SELECT " + rows.size());
                 }
             }
-        } else {
-            // Scan all columns (don't project at scanner level to avoid schema mismatch)
-            List<InternalRow> scannedRows = PgTableScanner.scanTable(connection, table, null, -1);
-            for (InternalRow row : scannedRows) {
-                rows.add(extractRow(rowType, getters, selectedColumns, row));
+        }
+
+        LOG.info("Using Calcite execution path for query: {}", sql);
+        
+        SchemaPlus rootSchema = Frameworks.createRootSchema(true);
+        FlussSchema flussSchema = new FlussSchema(connection, admin, database);
+        rootSchema.add(database, flussSchema);
+
+        FrameworkConfig config = Frameworks.newConfigBuilder()
+                .defaultSchema(rootSchema.getSubSchema(database))
+                .parserConfig(SqlParser.configBuilder()
+                        .setLex(Lex.JAVA)  // Use JAVA lexer for PostgreSQL-compatible identifier handling
+                        .setConformance(SqlConformanceEnum.PRAGMATIC_2003)  // PostgreSQL follows SQL:2003 pragmatically
+                        .build())
+                .traitDefs(ConventionTraitDef.INSTANCE, RelCollationTraitDef.INSTANCE)
+                .programs(Programs.ofRules(
+                        EnumerableRules.ENUMERABLE_PROJECT_RULE,
+                        EnumerableRules.ENUMERABLE_FILTER_RULE,
+                        EnumerableRules.ENUMERABLE_TABLE_SCAN_RULE,
+                        EnumerableRules.ENUMERABLE_JOIN_RULE,
+                        EnumerableRules.ENUMERABLE_AGGREGATE_RULE,
+                        EnumerableRules.ENUMERABLE_SORT_RULE,
+                        EnumerableRules.ENUMERABLE_LIMIT_RULE,
+                        EnumerableRules.ENUMERABLE_UNION_RULE,
+                        EnumerableRules.ENUMERABLE_VALUES_RULE
+                ))
+                .build();
+
+        Planner planner = Frameworks.getPlanner(config);
+        SqlNode parsed = planner.parse(sql);
+        SqlNode validated = planner.validate(parsed);
+        RelNode rel = planner.rel(validated).project();
+
+        RelTraitSet traitSet = planner.getEmptyTraitSet().replace(EnumerableConvention.INSTANCE);
+        RelNode optimized = planner.transform(0, traitSet, rel);
+        
+        List<Object[]> rows = new ArrayList<>();
+        try (Interpreter interpreter = new Interpreter(new DummyDataContext(), optimized)) {
+            for (Object[] row : interpreter) {
+                if (optimized.getRowType().getFieldCount() == 1 && !(row instanceof Object[])) {
+                    rows.add(new Object[]{row});
+                } else {
+                    rows.add(row);
+                }
             }
         }
-        
-        RowDescription description = PgRowDescriptionBuilder.fromRowType(rowType, selectedColumns);
+
+        RowDescription description = PgRowDescriptionBuilder.fromRelType(optimized.getRowType());
         return PgExecutionResult.query(new PgQueryResult(description, rows), "SELECT " + rows.size());
     }
 
@@ -635,9 +706,6 @@ public final class PgSqlEngine {
     }
     
     private static String stripDatabasePrefix(String sql) {
-        // Strip database prefix from table references (database.table -> table)
-        // This is needed because Calcite parser doesn't support database.table notation
-        // Only apply to DML statements, not DDL (CREATE TABLE needs the full name)
         return sql.replaceAll("\\b(default|[a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b", "$2");
     }
 
@@ -645,52 +713,125 @@ public final class PgSqlEngine {
         if (parameters == null || parameters.isEmpty()) {
             return sql;
         }
-        
+
         StringBuilder result = new StringBuilder();
-        int pos = 0;
+        List<Integer> parameterOrder = new ArrayList<>();
         boolean inSingleQuote = false;
         boolean inDoubleQuote = false;
-        
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+        String dollarTag = null;
+        int pos = 0;
+
         while (pos < sql.length()) {
             char c = sql.charAt(pos);
-            
-            // Track quote state
-            if (c == '\'' && !inDoubleQuote) {
-                inSingleQuote = !inSingleQuote;
+
+            if (inLineComment) {
                 result.append(c);
-                pos++;
-                continue;
-            }
-            if (c == '"' && !inSingleQuote) {
-                inDoubleQuote = !inDoubleQuote;
-                result.append(c);
-                pos++;
-                continue;
-            }
-            
-            // Only replace $N placeholders outside of quoted strings
-            if (c == '$' && !inSingleQuote && !inDoubleQuote) {
-                int numStart = pos + 1;
-                int numEnd = numStart;
-                while (numEnd < sql.length() && Character.isDigit(sql.charAt(numEnd))) {
-                    numEnd++;
+                if (c == '\n') {
+                    inLineComment = false;
                 }
-                
-                if (numEnd > numStart) {
-                    int paramIndex = Integer.parseInt(sql.substring(numStart, numEnd));
-                    if (paramIndex >= 1 && paramIndex <= parameters.size()) {
-                        String literal = renderLiteral(parameters.get(paramIndex - 1));
-                        result.append(literal);
+                pos++;
+                continue;
+            }
+            if (inBlockComment) {
+                if (c == '*' && pos + 1 < sql.length() && sql.charAt(pos + 1) == '/') {
+                    result.append("*/");
+                    pos += 2;
+                    inBlockComment = false;
+                    continue;
+                }
+                result.append(c);
+                pos++;
+                continue;
+            }
+            if (dollarTag != null) {
+                if (sql.startsWith(dollarTag, pos)) {
+                    result.append(dollarTag);
+                    pos += dollarTag.length();
+                    dollarTag = null;
+                    continue;
+                }
+                result.append(c);
+                pos++;
+                continue;
+            }
+
+            if (!inSingleQuote && !inDoubleQuote) {
+                if (c == '-' && pos + 1 < sql.length() && sql.charAt(pos + 1) == '-') {
+                    result.append("--");
+                    pos += 2;
+                    inLineComment = true;
+                    continue;
+                }
+                if (c == '/' && pos + 1 < sql.length() && sql.charAt(pos + 1) == '*') {
+                    result.append("/*");
+                    pos += 2;
+                    inBlockComment = true;
+                    continue;
+                }
+                if (c == '$') {
+                    String tag = detectDollarTag(sql, pos);
+                    if (tag != null) {
+                        result.append(tag);
+                        pos += tag.length();
+                        dollarTag = tag;
+                        continue;
+                    }
+                    int numStart = pos + 1;
+                    int numEnd = numStart;
+                    while (numEnd < sql.length() && Character.isDigit(sql.charAt(numEnd))) {
+                        numEnd++;
+                    }
+                    if (numEnd > numStart) {
+                        int paramIndex = Integer.parseInt(sql.substring(numStart, numEnd));
+                        if (paramIndex < 1 || paramIndex > parameters.size()) {
+                            throw new IllegalArgumentException("parameter $" + paramIndex + " out of range");
+                        }
+                        result.append(renderLiteral(parameters.get(paramIndex - 1)));
                         pos = numEnd;
                         continue;
                     }
                 }
             }
-            
+
+            if (c == '\'' && !inDoubleQuote) {
+                result.append(c);
+                if (inSingleQuote) {
+                    if (pos + 1 < sql.length() && sql.charAt(pos + 1) == '\'') {
+                        result.append('\'');
+                        pos += 2;
+                        continue;
+                    }
+                    inSingleQuote = false;
+                    pos++;
+                    continue;
+                }
+                inSingleQuote = true;
+                pos++;
+                continue;
+            }
+            if (c == '"' && !inSingleQuote) {
+                result.append(c);
+                if (inDoubleQuote) {
+                    if (pos + 1 < sql.length() && sql.charAt(pos + 1) == '"') {
+                        result.append('"');
+                        pos += 2;
+                        continue;
+                    }
+                    inDoubleQuote = false;
+                    pos++;
+                    continue;
+                }
+                inDoubleQuote = true;
+                pos++;
+                continue;
+            }
+
             result.append(c);
             pos++;
         }
-        
+
         return result.toString();
     }
 
@@ -703,6 +844,21 @@ public final class PgSqlEngine {
         }
         String raw = value.toString().replace("'", "''");
         return "'" + raw + "'";
+    }
+
+    private static String detectDollarTag(String sql, int start) {
+        int index = start + 1;
+        while (index < sql.length() && isDollarTagChar(sql.charAt(index))) {
+            index++;
+        }
+        if (index < sql.length() && sql.charAt(index) == '$') {
+            return sql.substring(start, index + 1);
+        }
+        return null;
+    }
+
+    private static boolean isDollarTagChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
     }
 
     private static List<String> resolveSelectedColumns(SqlNodeList selectList, RowType rowType) {
@@ -749,17 +905,14 @@ public final class PgSqlEngine {
         if (source instanceof SqlBasicCall && source.getKind() == SqlKind.VALUES) {
             SqlBasicCall call = (SqlBasicCall) source;
             
-            // Iterate through ALL operands - each is a row
             for (SqlNode operand : call.getOperandList()) {
                 List<SqlLiteral> rowValues = new ArrayList<>();
                 
                 if (operand instanceof SqlNodeList) {
-                    // Simple value list: (1, 'Alice')
                     for (SqlNode node : (SqlNodeList) operand) {
                         rowValues.add((SqlLiteral) node);
                     }
                 } else if (operand instanceof SqlBasicCall && operand.getKind() == SqlKind.ROW) {
-                    // ROW constructor: ROW(1, 'Alice')
                     SqlBasicCall rowCall = (SqlBasicCall) operand;
                     for (SqlNode rowOperand : rowCall.getOperandList()) {
                         rowValues.add((SqlLiteral) rowOperand);
@@ -819,6 +972,12 @@ public final class PgSqlEngine {
                 SqlNode aliasNode = call.operand(1);
                 if (aliasNode instanceof SqlIdentifier) {
                     name = ((SqlIdentifier) aliasNode).getSimple();
+                }
+            }
+            if (expression instanceof SqlBasicCall) {
+                SqlBasicCall call = (SqlBasicCall) expression;
+                if (call.getOperator().getName().equalsIgnoreCase("VERSION")) {
+                    expression = SqlLiteral.createCharString("PostgreSQL 13.0 (Cape)", item.getParserPosition());
                 }
             }
             if (!(expression instanceof SqlLiteral)) {
@@ -944,39 +1103,61 @@ public final class PgSqlEngine {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
+    private static final char[] HEX_ARRAY = "0123456789abcdef".toCharArray();
+    
+    private static String bytesToHex(byte[] bytes) {
+        char[] hexChars = new char[bytes.length * 2];
+        for (int i = 0; i < bytes.length; i++) {
+            int v = bytes[i] & 0xFF;
+            hexChars[i * 2] = HEX_ARRAY[v >>> 4];
+            hexChars[i * 2 + 1] = HEX_ARRAY[v & 0x0F];
+        }
+        return new String(hexChars);
+    }
+    
     private static byte[] encodeValue(Object value) {
         if (value == null) {
             return null;
         }
         if (value instanceof byte[]) {
             byte[] bytes = (byte[]) value;
-            StringBuilder builder = new StringBuilder("\\x");
-            for (byte b : bytes) {
-                builder.append(String.format(Locale.ROOT, "%02x", b));
-            }
-            return builder.toString().getBytes(StandardCharsets.UTF_8);
+            return ("\\x" + bytesToHex(bytes)).getBytes(StandardCharsets.UTF_8);
         }
         return Objects.toString(value).getBytes(StandardCharsets.UTF_8);
     }
 
+    private static final ThreadLocal<ByteBuffer> BUFFER_CACHE = 
+        ThreadLocal.withInitial(() -> ByteBuffer.allocate(8));
+    
     private static byte[] encodeBinaryValue(Object value, RowDescription description, int columnIndex) {
         if (value == null) {
             return null;
         }
         int oid = description.getFields().get(columnIndex).getTypeOid();
+        ByteBuffer buf = BUFFER_CACHE.get();
         switch (oid) {
             case 16:
                 return new byte[]{(byte) (toBoolean(value) ? 1 : 0)};
             case 21:
-                return ByteBuffer.allocate(2).putShort(((Number) toNumber(value)).shortValue()).array();
+                buf.clear();
+                buf.putShort(((Number) toNumber(value)).shortValue());
+                return java.util.Arrays.copyOfRange(buf.array(), 0, 2);
             case 23:
-                return ByteBuffer.allocate(4).putInt(((Number) toNumber(value)).intValue()).array();
+                buf.clear();
+                buf.putInt(((Number) toNumber(value)).intValue());
+                return java.util.Arrays.copyOfRange(buf.array(), 0, 4);
             case 20:
-                return ByteBuffer.allocate(8).putLong(((Number) toNumber(value)).longValue()).array();
+                buf.clear();
+                buf.putLong(((Number) toNumber(value)).longValue());
+                return java.util.Arrays.copyOfRange(buf.array(), 0, 8);
             case 700:
-                return ByteBuffer.allocate(4).putFloat(((Number) toNumber(value)).floatValue()).array();
+                buf.clear();
+                buf.putFloat(((Number) toNumber(value)).floatValue());
+                return java.util.Arrays.copyOfRange(buf.array(), 0, 4);
             case 701:
-                return ByteBuffer.allocate(8).putDouble(((Number) toNumber(value)).doubleValue()).array();
+                buf.clear();
+                buf.putDouble(((Number) toNumber(value)).doubleValue());
+                return java.util.Arrays.copyOfRange(buf.array(), 0, 8);
             case 1700:
                 return encodeNumeric(value);
             case 1082:
@@ -1159,5 +1340,12 @@ public final class PgSqlEngine {
             this.expressions = expressions;
             this.typeFactory = typeFactory;
         }
+    }
+
+    private static final class DummyDataContext implements org.apache.calcite.DataContext {
+        @Override public SchemaPlus getRootSchema() { return null; }
+        @Override public JavaTypeFactory getTypeFactory() { return new JavaTypeFactoryImpl(); }
+        @Override public QueryProvider getQueryProvider() { return null; }
+        @Override public Object get(String name) { return null; }
     }
 }

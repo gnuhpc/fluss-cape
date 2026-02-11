@@ -69,6 +69,24 @@ public class PubSubManager {
         }
     }
 
+    public void unsubscribeAll(ChannelHandlerContext ctx) {
+        for (Map.Entry<String, Set<ChannelHandlerContext>> entry : channelSubscriptions.entrySet()) {
+            Set<ChannelHandlerContext> subscribers = entry.getValue();
+            subscribers.remove(ctx);
+            if (subscribers.isEmpty()) {
+                channelSubscriptions.remove(entry.getKey());
+            }
+        }
+
+        for (Map.Entry<String, Set<ChannelHandlerContext>> entry : patternSubscriptions.entrySet()) {
+            Set<ChannelHandlerContext> subscribers = entry.getValue();
+            subscribers.remove(ctx);
+            if (subscribers.isEmpty()) {
+                patternSubscriptions.remove(entry.getKey());
+            }
+        }
+    }
+
     public int publish(String channel, byte[] message) {
         int recipientCount = 0;
 

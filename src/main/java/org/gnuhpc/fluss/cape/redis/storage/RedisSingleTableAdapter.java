@@ -35,12 +35,14 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class RedisSingleTableAdapter implements RedisStorageAdapter {
 
@@ -56,8 +58,20 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
     private final ThreadLocal<UpsertWriter> subKeyIndexWriter;
     private final ThreadLocal<Lookuper> subKeyIndexLookuper;
 
-    
-    private final Set<String> keyCache;
+    private final Table stringCounterTable;
+    private final ThreadLocal<UpsertWriter> stringCounterWriter;
+    private final ThreadLocal<Lookuper> stringCounterLookuper;
+
+    private final Table hashCounterTable;
+    private final ThreadLocal<UpsertWriter> hashCounterWriter;
+    private final ThreadLocal<Lookuper> hashCounterLookuper;
+
+    private final Table zsetCounterTable;
+    private final ThreadLocal<UpsertWriter> zsetCounterWriter;
+    private final ThreadLocal<Lookuper> zsetCounterLookuper;
+
+    private final ConcurrentLinkedQueue<UpsertWriter> allWriters = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Lookuper> allLookupers = new ConcurrentLinkedQueue<>();
 
     public RedisSingleTableAdapter(Connection connection, String database) throws Exception {
         this.connection = connection;
@@ -71,32 +85,43 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
         this.subKeyIndexTable = connection.getTable(subKeyIndexPath);
         this.subKeyIndexWriter = ThreadLocal.withInitial(this::createSubKeyIndexWriter);
         this.subKeyIndexLookuper = ThreadLocal.withInitial(this::createSubKeyIndexLookuper);
+
+        TablePath stringCounterPath = RedisDynamicTableManager.getStringCounterTablePath(database);
+        this.stringCounterTable = connection.getTable(stringCounterPath);
+        this.stringCounterWriter = ThreadLocal.withInitial(this::createStringCounterWriter);
+        this.stringCounterLookuper = ThreadLocal.withInitial(this::createStringCounterLookuper);
+
+        TablePath hashCounterPath = RedisDynamicTableManager.getHashCounterTablePath(database);
+        this.hashCounterTable = connection.getTable(hashCounterPath);
+        this.hashCounterWriter = ThreadLocal.withInitial(this::createHashCounterWriter);
+        this.hashCounterLookuper = ThreadLocal.withInitial(this::createHashCounterLookuper);
+
+        TablePath zsetCounterPath = RedisDynamicTableManager.getZsetCounterTablePath(database);
+        this.zsetCounterTable = connection.getTable(zsetCounterPath);
+        this.zsetCounterWriter = ThreadLocal.withInitial(this::createZsetCounterWriter);
+        this.zsetCounterLookuper = ThreadLocal.withInitial(this::createZsetCounterLookuper);
         
-        this.keyCache = Collections.synchronizedSet(new HashSet<>());
-        LOG.info("Initialized RedisSingleTableAdapter with dynamic tables: main={}, index={}", 
-                 tablePath, subKeyIndexPath);
+        LOG.info("Initialized RedisSingleTableAdapter with dynamic tables: main={}, index={}, stringCounter={}, hashCounter={}, zsetCounter={}", 
+                 tablePath, subKeyIndexPath, stringCounterPath, hashCounterPath, zsetCounterPath);
     }
 
     public byte[] get(byte[] key) throws Exception {
-        return getByCompositeKey(new String(key), "");
+        return getByCompositeKey(new String(key, StandardCharsets.UTF_8), "");
     }
 
     public void set(byte[] key, byte[] value) throws Exception {
-        String redisKey = new String(key);
+        String redisKey = new String(key, StandardCharsets.UTF_8);
         setByCompositeKey(redisKey, "string", "", value, null);
-        keyCache.add(redisKey);
     }
 
     public void delete(byte[] key) throws Exception {
-        String redisKey = new String(key);
+        String redisKey = new String(key, StandardCharsets.UTF_8);
         deleteByKey(redisKey);
         
         GenericRow indexKeyRow = GenericRow.of(
                 BinaryString.fromString(redisKey),
                 null);
         subKeyIndexWriter.get().delete(indexKeyRow).get();
-        
-        keyCache.remove(redisKey);
     }
 
     public boolean exists(byte[] key) throws Exception {
@@ -104,7 +129,7 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
     }
 
     public boolean keyExists(String key) throws Exception {
-        return exists(key.getBytes());
+        return exists(key.getBytes(StandardCharsets.UTF_8));
     }
 
     public List<String> keys(String pattern) throws Exception {
@@ -112,35 +137,134 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
     }
 
     public long incr(byte[] key) throws Exception {
-        throw new UnsupportedOperationException("INCR is not supported due to non-atomic semantics");
+        return incrBy(key, 1L);
+    }
+
+    public long decr(byte[] key) throws Exception {
+        return incrBy(key, -1L);
+    }
+
+    public long decrBy(byte[] key, long decrement) throws Exception {
+        return incrBy(key, -decrement);
     }
 
     public long incrBy(byte[] key, long increment) throws Exception {
-        throw new UnsupportedOperationException("INCRBY is not supported due to non-atomic semantics");
+        String redisKey = new String(key, StandardCharsets.UTF_8);
+        
+        String existingType = getType(redisKey);
+        if (existingType != null && !"string".equals(existingType)) {
+            throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        
+        GenericRow deltaRow = GenericRow.of(
+                BinaryString.fromString(redisKey),
+                increment);
+        stringCounterWriter.get().upsert(deltaRow).get();
+        
+        GenericRow keyRow = GenericRow.of(BinaryString.fromString(redisKey));
+        List<InternalRow> results = stringCounterLookuper.get().lookup(keyRow).get().getRowList();
+        
+        long aggregatedValue = 0;
+        if (results != null && !results.isEmpty()) {
+            aggregatedValue = results.get(0).getLong(1);
+        }
+        
+        setByCompositeKey(redisKey, "string", "", String.valueOf(aggregatedValue).getBytes(StandardCharsets.UTF_8), null);
+        
+        return aggregatedValue;
+    }
+
+    public double incrByFloat(byte[] key, double increment) throws Exception {
+        String redisKey = new String(key, StandardCharsets.UTF_8);
+        
+        String existingType = getType(redisKey);
+        if (existingType != null && !"string".equals(existingType)) {
+            throw new RuntimeException("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
+        
+        byte[] currentBytes = getByCompositeKey(redisKey, "");
+        double currentValue = 0.0;
+        
+        if (currentBytes != null) {
+            try {
+                currentValue = Double.parseDouble(new String(currentBytes, StandardCharsets.UTF_8));
+            } catch (NumberFormatException e) {
+                throw new RuntimeException("ERR value is not a valid float");
+            }
+        }
+        
+        double newValue = currentValue + increment;
+        
+        if (Double.isInfinite(newValue) || Double.isNaN(newValue)) {
+            throw new RuntimeException("ERR increment would produce NaN or Infinity");
+        }
+        
+        setByCompositeKey(redisKey, "string", "", String.valueOf(newValue).getBytes(StandardCharsets.UTF_8), null);
+        
+        return newValue;
+    }
+
+    public long hincrBy(String redisKey, String field, long increment) throws Exception {
+        GenericRow deltaRow = GenericRow.of(
+                BinaryString.fromString(redisKey),
+                BinaryString.fromString(field),
+                increment);
+        hashCounterWriter.get().upsert(deltaRow).get();
+        
+        GenericRow keyRow = GenericRow.of(
+                BinaryString.fromString(redisKey),
+                BinaryString.fromString(field));
+        List<InternalRow> results = hashCounterLookuper.get().lookup(keyRow).get().getRowList();
+        
+        long aggregatedValue = 0;
+        if (results != null && !results.isEmpty()) {
+            aggregatedValue = results.get(0).getLong(2);
+        }
+        
+        setByCompositeKey(redisKey, "hash", field, String.valueOf(aggregatedValue).getBytes(StandardCharsets.UTF_8), null);
+        
+        return aggregatedValue;
+    }
+
+    public double zincrBy(String redisKey, String member, double increment) throws Exception {
+        GenericRow deltaRow = GenericRow.of(
+                BinaryString.fromString(redisKey),
+                BinaryString.fromString(member),
+                increment);
+        zsetCounterWriter.get().upsert(deltaRow).get();
+        
+        GenericRow keyRow = GenericRow.of(
+                BinaryString.fromString(redisKey),
+                BinaryString.fromString(member));
+        List<InternalRow> results = zsetCounterLookuper.get().lookup(keyRow).get().getRowList();
+        
+        double aggregatedValue = 0.0;
+        if (results != null && !results.isEmpty()) {
+            aggregatedValue = results.get(0).getDouble(2);
+        }
+        
+        setByCompositeKey(redisKey, "zset", member, null, aggregatedValue);
+        
+        return aggregatedValue;
     }
 
     public void close() {
-        UpsertWriter writer = upsertWriter.get();
-        if (writer != null) {
+        for (UpsertWriter writer : allWriters) {
             try {
                 writer.flush();
-            } catch (RuntimeException e) {
-                LOG.warn("Failed to flush main writer", e);
+            } catch (Exception e) {
+                LOG.warn("Failed to flush writer during close", e);
             }
         }
-        UpsertWriter indexWriter = subKeyIndexWriter.get();
-        if (indexWriter != null) {
-            try {
-                indexWriter.flush();
-            } catch (RuntimeException e) {
-                LOG.warn("Failed to flush subkey index writer", e);
-            }
-        }
+        allWriters.clear();
+        allLookupers.clear();
     }
 
     private UpsertWriter createUpsertWriter() {
         try {
-            return table.newUpsert().createWriter();
+            UpsertWriter writer = table.newUpsert().createWriter();
+            allWriters.add(writer);
+            return writer;
         } catch (RuntimeException e) {
             throw new RuntimeException("Failed to create upsert writer for " + tablePath, e);
         }
@@ -148,7 +272,9 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
 
     private Lookuper createLookuper() {
         try {
-            return table.newLookup().createLookuper();
+            Lookuper lookuper = table.newLookup().createLookuper();
+            allLookupers.add(lookuper);
+            return lookuper;
         } catch (RuntimeException e) {
             throw new RuntimeException("Failed to create lookuper for " + tablePath, e);
         }
@@ -156,7 +282,9 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
 
     private UpsertWriter createSubKeyIndexWriter() {
         try {
-            return subKeyIndexTable.newUpsert().createWriter();
+            UpsertWriter writer = subKeyIndexTable.newUpsert().createWriter();
+            allWriters.add(writer);
+            return writer;
         } catch (RuntimeException e) {
             throw new RuntimeException("Failed to create subkey index writer", e);
         }
@@ -164,9 +292,71 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
 
     private Lookuper createSubKeyIndexLookuper() {
         try {
-            return subKeyIndexTable.newLookup().createLookuper();
+            Lookuper lookuper = subKeyIndexTable.newLookup().createLookuper();
+            allLookupers.add(lookuper);
+            return lookuper;
         } catch (RuntimeException e) {
             throw new RuntimeException("Failed to create subkey index lookuper", e);
+        }
+    }
+
+    private UpsertWriter createStringCounterWriter() {
+        try {
+            UpsertWriter writer = stringCounterTable.newUpsert().createWriter();
+            allWriters.add(writer);
+            return writer;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create string counter writer", e);
+        }
+    }
+
+    private Lookuper createStringCounterLookuper() {
+        try {
+            Lookuper lookuper = stringCounterTable.newLookup().createLookuper();
+            allLookupers.add(lookuper);
+            return lookuper;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create string counter lookuper", e);
+        }
+    }
+
+    private UpsertWriter createHashCounterWriter() {
+        try {
+            UpsertWriter writer = hashCounterTable.newUpsert().createWriter();
+            allWriters.add(writer);
+            return writer;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create hash counter writer", e);
+        }
+    }
+
+    private Lookuper createHashCounterLookuper() {
+        try {
+            Lookuper lookuper = hashCounterTable.newLookup().createLookuper();
+            allLookupers.add(lookuper);
+            return lookuper;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create hash counter lookuper", e);
+        }
+    }
+
+    private UpsertWriter createZsetCounterWriter() {
+        try {
+            UpsertWriter writer = zsetCounterTable.newUpsert().createWriter();
+            allWriters.add(writer);
+            return writer;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create zset counter writer", e);
+        }
+    }
+
+    private Lookuper createZsetCounterLookuper() {
+        try {
+            Lookuper lookuper = zsetCounterTable.newLookup().createLookuper();
+            allLookupers.add(lookuper);
+            return lookuper;
+        } catch (RuntimeException e) {
+            throw new RuntimeException("Failed to create zset counter lookuper", e);
         }
     }
 
@@ -287,25 +477,22 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
      * Get all Redis keys from cache (lightweight, no data lookup).
      */
     public Set<String> getAllKeys() {
-        LOG.info("getAllKeys() called - returning {} keys from cache", keyCache.size());
-        if (keyCache.isEmpty()) {
-            try {
-                return getAllRedisKeysFromIndex();
-            } catch (Exception e) {
-                LOG.warn("Failed to fetch keys from index, returning cache", e);
-            }
+        try {
+            return getAllRedisKeysFromIndex();
+        } catch (Exception e) {
+            LOG.warn("Failed to fetch keys from index", e);
+            return Collections.emptySet();
         }
-        return new HashSet<>(keyCache);
     }
     
     /**
      * Scan all rows in the table (for KEYS/SCAN commands).
      */
     public List<FullKeyValue> scanAll() throws Exception {
-        LOG.info("scanAll() called - using in-memory key cache with {} keys", keyCache.size());
+        LOG.info("scanAll() called - scanning index from storage");
         List<FullKeyValue> results = new ArrayList<>();
         
-        Set<String> allRedisKeys = new HashSet<>(keyCache);
+        Set<String> allRedisKeys = getAllRedisKeysFromIndex();
         
         for (String redisKey : allRedisKeys) {
             Set<String> subKeys = getSubKeysFromIndex(redisKey);
@@ -428,6 +615,67 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
     /**
      * Set value by composite key with redis_type and optional score.
      */
+    /**
+     * Set value by composite key (redisKey + subKey).
+     *
+     * <p><b>CRITICAL - Secondary Index Consistency Risk:</b>
+     * <p>This operation is NOT atomic due to Fluss storage limitations. It performs:
+     * <ol>
+     *   <li>WRITE main data to primary table
+     *   <li>READ current subkeys from index
+     *   <li>WRITE updated subkeys to index table
+     * </ol>
+     *
+     * <p><b>Crash Recovery Risk:</b>
+     * If a crash occurs between steps 1 and 3:
+     * <ul>
+     *   <li><b>Orphan data</b> - Main data exists but index doesn't reference it
+     *   <li><b>Stale index</b> - Index references data that was deleted
+     *   <li><b>Incomplete HGETALL</b> - HGETALL may miss newly added fields
+     * </ul>
+     *
+     * <p><b>Impact on Redis Commands:</b>
+     * <table>
+     *   <tr><th>Command</th><th>Risk</th><th>Symptom</th></tr>
+     *   <tr><td>HGETALL</td><td>High</td><td>May return incomplete field list</td></tr>
+     *   <tr><td>HKEYS</td><td>High</td><td>May miss keys or show deleted keys</td></tr>
+     *   <tr><td>HLEN</td><td>High</td><td>May return incorrect count</td></tr>
+     *   <tr><td>HGET</td><td>Low</td><td>Still works (queries main table directly)</td></tr>
+     * </table>
+     *
+     * <p><b>Why This Happens:</b>
+     * Fluss KV storage does not support:
+     * <ul>
+     *   <li>Multi-table transactions
+     *   <li>Two-phase commit (2PC)
+     *   <li>Atomic cross-table operations
+     * </ul>
+     *
+     * <p><b>Mitigation Strategies:</b>
+     * <ol>
+     *   <li><b>Write-ahead pattern</b> - Write index before data (current approach minimizes window)
+     *   <li><b>Reconciliation job</b> - Periodic background job to fix inconsistencies
+     *   <li><b>Accept eventual consistency</b> - Index catches up on next write
+     *   <li><b>Client retry logic</b> - Retry failed operations on crash recovery
+     * </ol>
+     *
+     * <p><b>Production Recommendations:</b>
+     * <ul>
+     *   <li>✅ Monitor index inconsistency metrics
+     *   <li>✅ Run periodic reconciliation (e.g., nightly scan + repair)
+     *   <li>✅ Use application-level retries for critical operations
+     *   <li>⚠️ Understand that HGETALL results may be eventually consistent
+     * </ul>
+     *
+     * @param redisKey Redis key
+     * @param redisType Redis data type (e.g., "hash", "zset")
+     * @param subKey Sub-key (field name for hash, member for zset)
+     * @param value Value bytes
+     * @param score Score (for sorted sets, null for hashes)
+     * @throws Exception if write fails
+     * @see <a href="https://github.com/gnuhpc/fluss-cape/blob/main/docs/REDIS-GUIDE.md#index-consistency">
+     *     Redis Guide - Index Consistency</a>
+     */
     public void setByCompositeKey(String redisKey, String redisType, String subKey, byte[] value, Double score) throws Exception {
         GenericRow row = GenericRow.of(
                 BinaryString.fromString(redisKey), 
@@ -449,8 +697,6 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
                 BinaryString.fromString(subKeysJson));
         subKeyIndexWriter.get().upsert(indexRow).get();
         LOG.info("Index write succeeded for redis_key={}", redisKey);
-        
-        keyCache.add(redisKey);
     }
 
     /**
@@ -496,7 +742,6 @@ public class RedisSingleTableAdapter implements RedisStorageAdapter {
                 BinaryString.fromString(redisKey),
                 null);
         subKeyIndexWriter.get().delete(indexKeyRow).get();        
-        keyCache.remove(redisKey);
     }
 
     /**

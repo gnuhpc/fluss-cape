@@ -24,15 +24,27 @@ import org.apache.fluss.client.admin.Admin;
 
 import java.util.Map;
 
+import org.apache.calcite.schema.Schema;
+import org.apache.calcite.schema.SchemaFactory;
+import org.apache.calcite.schema.SchemaPlus;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
+
+import java.util.Map;
+
 public class FlussSchemaFactory implements SchemaFactory {
 
     @Override
     public Schema create(SchemaPlus parentSchema, String name, Map<String, Object> operand) {
+        Object connection = operand.get("connection");
+        if (!(connection instanceof Connection)) {
+            throw new IllegalArgumentException("Fluss connection is required to build schema");
+        }
         Object admin = operand.get("admin");
         if (!(admin instanceof Admin)) {
             throw new IllegalArgumentException("Fluss admin is required to build schema");
         }
         String database = (String) operand.getOrDefault("database", "default");
-        return new FlussSchema((Admin) admin, database);
+        return new FlussSchema((Connection) connection, (Admin) admin, database);
     }
 }

@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.expiration.ExpirationManager;
 import org.gnuhpc.fluss.cape.redis.metadata.ListMetadata;
@@ -37,6 +38,21 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * Executor for Redis List commands.
+ *
+ * <h3>⚠️ Multi-Instance Deployment Limitation</h3>
+ * <p>Blocking operations (BLPOP, BRPOP, BLMOVE) store their blocking state in local memory
+ * tied to the Netty {@link ChannelHandlerContext}. In multi-instance deployments with load
+ * balancers, if a blocking command and the subsequent data-producing command (e.g., LPUSH)
+ * route to different CAPE instances, the blocked client will NOT be notified because the
+ * blocking state exists only on the first instance.</p>
+ *
+ * <p><b>Solution</b>: Configure sticky sessions (session affinity) at your load balancer.
+ * See {@link TransactionCommandExecutor} class JavaDoc for HAProxy/Nginx configuration examples.</p>
+ *
+ * @see TransactionCommandExecutor Full explanation and load balancer configuration examples
+ */
 public class ListCommandExecutor implements BlockingAwareExecutor {
 
     private static final Logger LOG = LoggerFactory.getLogger(ListCommandExecutor.class);
@@ -941,7 +957,7 @@ public class ListCommandExecutor implements BlockingAwareExecutor {
         metadataManager.saveListMetadata(key, REDIS_TYPE, metadata);
 
         List<byte[]> response = new ArrayList<>();
-        response.add(key.getBytes());
+        response.add(key.getBytes(StandardCharsets.UTF_8));
         response.add(value);
         return RedisResponse.bytesArray(response);
     }
@@ -987,7 +1003,7 @@ public class ListCommandExecutor implements BlockingAwareExecutor {
                         metadataManager.saveListMetadata(key, REDIS_TYPE, metadata);
 
                         List<byte[]> response = new ArrayList<>();
-                        response.add(key.getBytes());
+                        response.add(key.getBytes(StandardCharsets.UTF_8));
                         response.add(value);
                         return RedisResponse.bytesArray(response);
                     }
@@ -1040,7 +1056,7 @@ public class ListCommandExecutor implements BlockingAwareExecutor {
                         metadataManager.saveListMetadata(key, REDIS_TYPE, metadata);
 
                         List<byte[]> response = new ArrayList<>();
-                        response.add(key.getBytes());
+                        response.add(key.getBytes(StandardCharsets.UTF_8));
                         response.add(value);
                         return RedisResponse.bytesArray(response);
                     }

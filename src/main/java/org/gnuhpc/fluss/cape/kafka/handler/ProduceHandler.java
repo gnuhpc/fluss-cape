@@ -81,6 +81,66 @@ public class ProduceHandler {
         }
     }
 
+    /**
+     * Handles PRODUCE requests by converting Kafka records into Fluss rows and flushing them to
+     * storage.
+     *
+     * <h3>⚠️ CRITICAL LIMITATION: Synchronous flush for all Kafka acks levels</h3>
+     * <p>The Kafka {@code acks} setting ({@code 0}, {@code 1}, or {@code all}) is <b>ignored</b>
+     * with respect to durability and latency semantics. After all records for a partition are
+     * appended, this handler always calls {@link AppendWriter#flush()} synchronously. The flush
+     * blocks the request thread until Fluss durably persists the data, meaning:</p>
+     *
+     * <h4>Current behavior (CAPE vs. Kafka expectations)</h4>
+     * <table border="1">
+     *   <tr><th>Kafka acks</th><th>Kafka expectation</th><th>CAPE behavior</th></tr>
+     *   <tr><td>0</td><td>Fire-and-forget, no durability wait</td><td>🚫 Still performs blocking flush</td></tr>
+     *   <tr><td>1</td><td>Wait for leader write only</td><td>🚫 Same blocking flush as {@code acks=all}</td></tr>
+     *   <tr><td>all</td><td>Wait for quorum/ISR durability</td><td>⚠️ Blocking flush, but Fluss lacks Kafka ISR semantics</td></tr>
+     * </table>
+     *
+     * <h4>Performance and operational impact</h4>
+     * <ul>
+     *   <li>{@code acks=0} does <b>not</b> increase throughput; each partition still waits on
+     *   {@code flush()}</li>
+     *   <li>{@code acks=1} has the same latency/throughput as {@code acks=all} because CAPE does
+     *   not distinguish them when interacting with Fluss</li>
+     *   <li>End-to-end latency is dominated by Fluss flush time even when clients believe they are
+     *   using fire-and-forget semantics</li>
+     *   <li>Client-side timeouts configured for {@code acks=0/1} may still trigger if flush is slow
+     *   under load</li>
+     * </ul>
+     *
+     * <h4>Root cause</h4>
+     * <ul>
+     *   <li>Fluss {@link AppendWriter} exposes only a blocking {@code flush()} API; no async flush
+     *   or durability-level toggles exist</li>
+     *   <li>CAPE does not map Kafka acks to Fluss replication levels because Fluss lacks Kafka ISR
+     *   and quorum concepts</li>
+     *   <li>To avoid data loss, this handler opts for synchronous flush after each partition batch</li>
+     * </ul>
+     *
+     * <h4>Recommended mitigations</h4>
+     * <ul>
+     *   <li>Batch more records per request/partition to amortize the blocking flush cost</li>
+     *   <li>Avoid relying on {@code acks=0/1} for latency gains; treat CAPE as always flushing
+     *   synchronously</li>
+     *   <li>Tune client linger/batching settings to reduce flush frequency (e.g.,
+     *   {@code linger.ms}, {@code batch.size})</li>
+     *   <li>Monitor flush latency and thread pool utilization; slow flushes backpressure producers</li>
+     * </ul>
+     *
+     * <h4>Future work required</h4>
+     * <ol>
+     *   <li>Add an async flush path in Fluss {@code AppendWriter} (or equivalent) to honor
+     *   fire-and-forget semantics</li>
+     *   <li>Introduce configurable durability levels so CAPE can differentiate {@code acks=0/1/all}
+     *   realistically</li>
+     *   <li>Expose metrics for flush latency and queue depth to surface the synchronous behavior</li>
+     * </ol>
+     *
+     * @see org.gnuhpc.fluss.cape.kafka.handler.InitProducerIdHandler for producer ID persistence
+     */
     private CompletableFuture<ProduceResponse> handleProduceAsync(ProduceRequest produceRequest) {
         LOG.info("Handling PRODUCE request for {} topics", produceRequest.data().topicData().size());
         
@@ -143,6 +203,7 @@ public class ProduceHandler {
                                     try {
                                         LOG.info("All appends complete, flushing writer for {}-{}", topicName, partition);
                                         long flushStart = System.currentTimeMillis();
+                                        // NOTE: AppendWriter.flush() is blocking; Kafka acks (0/1/all) are not differentiated here
                                         writer.flush();
                                         long flushTime = System.currentTimeMillis() - flushStart;
                                         LOG.info("Flush completed in {}ms for {}-{}", flushTime, topicName, partition);
@@ -156,6 +217,7 @@ public class ProduceHandler {
                                                  finalRecordCount, topicName, partition);
                                     } catch (Exception e) {
                                         LOG.error("Error flushing writer for {}-{}", topicName, partition, e);
+                                        writerPool.invalidate(topicName);
                                         responses.put(tp, new ProduceResponse.PartitionResponse(
                                             Errors.UNKNOWN_SERVER_ERROR
                                         ));
@@ -166,6 +228,7 @@ public class ProduceHandler {
                         
                     } catch (Exception e) {
                         LOG.error("Error processing partition {} of topic {}", partition, topicName, e);
+                        writerPool.invalidate(topicName);
                         responses.put(tp, new ProduceResponse.PartitionResponse(
                             Errors.UNKNOWN_SERVER_ERROR
                         ));
@@ -174,6 +237,7 @@ public class ProduceHandler {
                 
             } catch (Exception e) {
                 LOG.error("Error handling produce for topic {}", topicName, e);
+                writerPool.invalidate(topicName);
                 for (var partitionData : topicData.partitionData()) {
                     org.apache.kafka.common.TopicPartition tp = 
                         new org.apache.kafka.common.TopicPartition(topicName, partitionData.index());

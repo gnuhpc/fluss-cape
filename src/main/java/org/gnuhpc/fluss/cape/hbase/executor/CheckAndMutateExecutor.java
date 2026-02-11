@@ -45,6 +45,40 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Executor for HBase CheckAndMutate operations (conditional mutations). Evaluates a condition on a
  * column value and performs the mutation only if the condition is met.
+ *
+ * <p><b>IMPORTANT - Atomicity Limitation:</b>
+ * <p>This implementation is NOT fully atomic due to Fluss storage layer limitations.
+ * The operation performs:
+ * <ol>
+ *   <li>READ - lookup current value
+ *   <li>CHECK - evaluate condition
+ *   <li>WRITE - upsert new value if condition met
+ * </ol>
+ *
+ * <p><b>Race Condition Risk:</b> Between steps 1 and 3, another client can modify the row,
+ * causing the condition check to be based on stale data. This can lead to:
+ * <ul>
+ *   <li>Lost updates if two clients check-and-mutate the same row concurrently
+ *   <li>Inconsistent state if condition assumes isolation
+ * </ul>
+ *
+ * <p><b>Recommendations:</b>
+ * <ul>
+ *   <li>Use only for non-critical conditional updates where eventual consistency is acceptable
+ *   <li>Implement application-level locking for critical operations
+ *   <li>Consider using optimistic versioning at the application layer
+ *   <li>Document this limitation for HBase clients migrating to CAPE
+ * </ul>
+ *
+ * <p>This limitation exists because Fluss KV storage does not support:
+ * <ul>
+ *   <li>Transactions (BEGIN/COMMIT/ROLLBACK)
+ *   <li>Compare-and-swap (CAS) operations
+ *   <li>Conditional atomic updates
+ * </ul>
+ *
+ * @see <a href="https://github.com/gnuhpc/fluss-cape/blob/main/docs/ADMIN-API-LIMITATIONS.md">
+ *     CAPE API Limitations</a>
  */
 public class CheckAndMutateExecutor implements HBaseOperationExecutor {
 
@@ -262,8 +296,8 @@ public class CheckAndMutateExecutor implements HBaseOperationExecutor {
                         HBaseRpcResponse.failure(
                                 callId,
                                 new UnsupportedOperationException(
-                                        "CheckAndMutate does not support non-atomic mutation type: "
-                                                + mutation.getMutateType())));
+                                        "CheckAndMutate does not support " + mutation.getMutateType()
+                                                + ". Use direct INCREMENT/APPEND for atomic operations.")));
             default:
                 return CompletableFuture.completedFuture(
                         HBaseRpcResponse.failure(

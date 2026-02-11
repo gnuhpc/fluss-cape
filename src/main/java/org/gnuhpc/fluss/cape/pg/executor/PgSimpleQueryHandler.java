@@ -65,9 +65,9 @@ public class PgSimpleQueryHandler implements PgCommandHandler {
             PgExecutionResult execution = PgSqlEngine.execute(session, sql, List.of());
             return respondWithResult(execution, true);
         } catch (IllegalArgumentException e) {
-            return PgErrorResponseFactory.errorWithReady("0A000", e.getMessage());
+            return PgErrorResponseFactory.errorWithReady("0A000", PgErrorSanitizer.sanitize(e));
         } catch (Exception e) {
-            return PgErrorResponseFactory.errorWithReady("XX000", e.getMessage());
+            return PgErrorResponseFactory.errorWithReady("XX000", PgErrorSanitizer.sanitize(e));
         }
     }
 

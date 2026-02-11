@@ -1,0 +1,2 @@
+FROM fluss-cape:1.0.0
+COPY target/fluss-cape-1.0.4-SNAPSHOT.jar /app/fluss-cape.jar

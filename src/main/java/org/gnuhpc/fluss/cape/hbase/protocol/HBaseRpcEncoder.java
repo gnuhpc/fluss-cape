@@ -17,9 +17,9 @@
 
 package org.gnuhpc.fluss.cape.hbase.protocol;
 
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.MessageToByteEncoder;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.MessageToByteEncoder;
 
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos;
 import org.apache.hbase.thirdparty.com.google.protobuf.CodedOutputStream;
@@ -28,7 +28,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 
 /**
  * Netty encoder for HBase RPC responses.
@@ -78,13 +77,12 @@ public class HBaseRpcEncoder extends MessageToByteEncoder<HBaseRpcResponse> {
             }
         }
 
-        int headerSize = header.getSerializedSize();
-        int headerVintSize = CodedOutputStream.computeUInt32SizeNoTag(headerSize);
-        int resultSize = result != null ? result.getSerializedSize() : 0;
-        int resultVintSize = result != null ? CodedOutputStream.computeUInt32SizeNoTag(resultSize) : 0;
+        int headerSize = CodedOutputStream.computeMessageSizeNoTag(header);
+        int resultSize = result != null ? CodedOutputStream.computeMessageSizeNoTag(result) : 0;
         int cellBlockSize = cellBlock != null ? cellBlock.length : 0;
 
-        int totalSize = headerSize + headerVintSize + resultSize + resultVintSize + cellBlockSize;
+        int protobufSize = headerSize + resultSize;
+        int totalSize = protobufSize + cellBlockSize;
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("Encoding response: callId={}, totalSize={}, cellBlockSize={}",
@@ -93,18 +91,14 @@ public class HBaseRpcEncoder extends MessageToByteEncoder<HBaseRpcResponse> {
 
         out.writeInt(totalSize);
 
-        int protobufSize = headerSize + headerVintSize + resultSize + resultVintSize;
-        ByteBuffer nioBuf = ByteBuffer.allocate(protobufSize);
-        CodedOutputStream cos = CodedOutputStream.newInstance(nioBuf);
-
+        byte[] protobufBytes = new byte[protobufSize];
+        CodedOutputStream cos = CodedOutputStream.newInstance(protobufBytes);
         cos.writeMessageNoTag(header);
         if (result != null) {
             cos.writeMessageNoTag(result);
         }
         cos.flush();
-
-        nioBuf.flip();
-        out.writeBytes(nioBuf);
+        out.writeBytes(protobufBytes);
 
         if (cellBlock != null) {
             out.writeBytes(cellBlock);
@@ -118,53 +112,37 @@ public class HBaseRpcEncoder extends MessageToByteEncoder<HBaseRpcResponse> {
                 RPCProtos.ExceptionResponse.newBuilder()
                         .setExceptionClassName(exception.getClass().getName());
 
-        String stackTrace = exception.getMessage() != null
-                ? exception.getMessage() + "\n" + getStackTrace(exception)
-                : getStackTrace(exception);
-        exceptionBuilder.setStackTrace(stackTrace);
+        exceptionBuilder.setStackTrace(sanitizeException(exception));
 
         RPCProtos.ResponseHeader header = RPCProtos.ResponseHeader.newBuilder()
                 .setCallId(response.getCallId())
                 .setException(exceptionBuilder.build())
                 .build();
 
-        byte[] headerBytes = header.toByteArray();
-        int headerVintSize = CodedOutputStream.computeUInt32SizeNoTag(headerBytes.length);
-        int totalLength = headerVintSize + headerBytes.length;
-
-        out.writeInt(totalLength);
-        writeVarint32(out, headerBytes.length);
+        int headerSize = CodedOutputStream.computeMessageSizeNoTag(header);
+        out.writeInt(headerSize);
+        byte[] headerBytes = new byte[headerSize];
+        CodedOutputStream cos = CodedOutputStream.newInstance(headerBytes);
+        cos.writeMessageNoTag(header);
+        cos.flush();
         out.writeBytes(headerBytes);
 
         LOG.warn("Encoded error response: callId={}, exception={}",
                 response.getCallId(), exception.getClass().getSimpleName());
     }
 
-    private void writeVarint32(ByteBuf buf, int value) {
-        while ((value & ~0x7F) != 0) {
-            buf.writeByte((value & 0x7F) | 0x80);
-            value >>>= 7;
+    private String sanitizeException(Throwable t) {
+        String message = t.getMessage();
+        if (message != null) {
+            message = message.replace("\r", " ").replace("\n", " ").trim();
         }
-        buf.writeByte(value & 0x7F);
-    }
-
-    private String getStackTrace(Throwable t) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(t.getClass().getName());
-        if (t.getMessage() != null) {
-            sb.append(": ").append(t.getMessage());
-        }
-        sb.append("\n");
-
-        StackTraceElement[] elements = t.getStackTrace();
-        int limit = Math.min(elements.length, 20);
-        for (int i = 0; i < limit; i++) {
-            sb.append("\tat ").append(elements[i].toString()).append("\n");
-        }
-        if (elements.length > limit) {
-            sb.append("\t... ").append(elements.length - limit).append(" more\n");
-        }
-
-        return sb.toString();
+        String base = t.getClass().getSimpleName();
+        String combined = message == null || message.isEmpty()
+                ? base
+                : base + ": " + message;
+        int maxLength = 512;
+        return combined.length() > maxLength
+                ? combined.substring(0, maxLength)
+                : combined;
     }
 }

@@ -90,6 +90,7 @@ public class RedisConnectionHandler extends SimpleChannelInboundHandler<RedisMes
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         LOG.debug("Channel inactive, cancelling blocking operations for {}", ctx.channel().id());
         blockingQueue.cancelAllForChannel(ctx);
+        commandRouter.cleanupSubscriptions(ctx);
         super.channelInactive(ctx);
     }
 
@@ -97,6 +98,7 @@ public class RedisConnectionHandler extends SimpleChannelInboundHandler<RedisMes
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         LOG.error("Exception in Redis connection handler", cause);
         blockingQueue.cancelAllForChannel(ctx);
+        commandRouter.cleanupSubscriptions(ctx);
         ctx.close();
     }
 }

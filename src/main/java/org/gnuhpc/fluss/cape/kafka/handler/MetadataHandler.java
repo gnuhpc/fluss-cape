@@ -46,6 +46,7 @@ public class MetadataHandler {
     private final Connection flussConnection;
     private final KafkaCompatConfig config;
     private final TablePathResolver tablePathResolver;
+    private final Object topicsLock = new Object();
 
     public MetadataHandler(Connection flussConnection, KafkaCompatConfig config, 
                           TablePathResolver tablePathResolver) {
@@ -162,7 +163,7 @@ public class MetadataHandler {
                             .setName(topicName)
                             .setErrorCode(Errors.UNKNOWN_TOPIC_OR_PARTITION.code())
                             .setIsInternal(false);
-                    synchronized (responseData.topics()) {
+                    synchronized (topicsLock) {
                         responseData.topics().add(topicData);
                     }
                     LOG.debug("Topic {} does not exist in Fluss", topicName);
@@ -179,7 +180,7 @@ public class MetadataHandler {
                         .setName(topicName)
                         .setErrorCode(Errors.UNKNOWN_SERVER_ERROR.code())
                         .setIsInternal(false);
-                synchronized (responseData.topics()) {
+                synchronized (topicsLock) {
                     responseData.topics().add(topicData);
                 }
                 return null;

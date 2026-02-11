@@ -49,6 +49,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class JoinGroupHandler {
     private static final Logger LOG = LoggerFactory.getLogger(JoinGroupHandler.class);
@@ -59,6 +61,7 @@ public class JoinGroupHandler {
             pendingJoinResponses;
     private final Map<String, ScheduledFuture<?>> rebalanceTimeouts;
     private final Map<String, ScheduledFuture<?>> joinCompletionTimeouts;
+    private final ConcurrentHashMap<String, Lock> groupLocks = new ConcurrentHashMap<>();
 
     public JoinGroupHandler(ConsumerGroupCoordinatorV2 coordinator) {
         this.coordinator = coordinator;
@@ -107,7 +110,9 @@ public class JoinGroupHandler {
         
         ConsumerGroupState groupState = coordinator.getOrCreateGroupState(groupId);
         
-        synchronized (groupState) {
+        Lock groupLock = groupLocks.computeIfAbsent(groupId, k -> new ReentrantLock());
+        groupLock.lock();
+        try {
             if (groupState.getProtocolType() == null) {
                 groupState.setProtocolType(protocolType);
             } else if (!groupState.getProtocolType().equals(protocolType)) {
@@ -207,6 +212,8 @@ public class JoinGroupHandler {
                                 .setErrorCode(Errors.UNKNOWN_SERVER_ERROR.code());
                         return new JoinGroupResponse(errorResponse, apiVersion);
                     });
+        } finally {
+            groupLock.unlock();
         }
     }
     

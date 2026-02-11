@@ -1,50 +1,71 @@
+# Stage 1: Build
+FROM maven:3.9.6-eclipse-temurin-11 AS builder
+
+WORKDIR /build
+
+# Copy project files
+COPY pom.xml .
+COPY src ./src
+
+# Build JAR with skipped tests (tests require running environment)
+RUN mvn clean package -DskipTests
+
+# Stage 2: Runtime
 FROM eclipse-temurin:11-jre-jammy
 
 LABEL maintainer="fluss-hbase-compat"
 LABEL description="HBase Compatibility Layer for Apache Fluss"
 
-# Install necessary packages
+# Create non-root user
+RUN groupadd -r cape && useradd -r -g cape -m -d /app cape
+
+# Install necessary packages (minimal)
 RUN apt-get update && apt-get install -y \
     curl \
     netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
 WORKDIR /app
 
-# Copy the shaded JAR
-COPY target/fluss-cape-1.0.0-SNAPSHOT.jar /app/fluss-cape.jar
+# Copy the shaded JAR from builder stage
+COPY --from=builder /build/target/fluss-cape-*.jar /app/fluss-cape.jar
+
+# Chown directory to non-root user
+RUN chown -R cape:cape /app
+
+# Switch to non-root user
+USER cape
 
 # Expose ports
 # 16020 - HBase RPC port
 # 6379 - Redis port
 # 5432 - PostgreSQL port
 # 9092 - Kafka port
-# 8081 - Health check HTTP port (default changed from 8080 to avoid ZooKeeper AdminServer conflict)
+# 8081 - Health check HTTP port
 EXPOSE 16020 6379 5432 9092 8081
 
 # Set default environment variables
-ENV FLUSS_BOOTSTRAP="localhost:9123"
-ENV ZK_QUORUM="localhost:2181"
-ENV BIND_ADDRESS="0.0.0.0"
-ENV BIND_PORT="16020"
-ENV HEALTH_PORT="8081"
-ENV TABLES=""
-ENV SERVER_ID=""
-ENV REDIS_ENABLE="true"
-ENV REDIS_BIND_ADDRESS="0.0.0.0"
-ENV REDIS_BIND_PORT="6379"
-ENV REDIS_SHARDING_ENABLED="true"
-ENV REDIS_SHARDING_NUM_SHARDS="16"
-ENV PG_ENABLE="true"
-ENV PG_BIND_ADDRESS="0.0.0.0"
-ENV PG_BIND_PORT="5432"
-ENV PG_DATABASE="default"
-ENV PG_AUTH_MODE="trust"
-ENV KAFKA_ENABLE="true"
-ENV KAFKA_BIND_ADDRESS="0.0.0.0"
-ENV KAFKA_BIND_PORT="9092"
-ENV KAFKA_DEFAULT_DATABASE="default"
+ENV FLUSS_BOOTSTRAP="localhost:9123" \
+    ZK_QUORUM="localhost:2181" \
+    BIND_ADDRESS="0.0.0.0" \
+    BIND_PORT="16020" \
+    HEALTH_PORT="8081" \
+    TABLES="" \
+    SERVER_ID="" \
+    REDIS_ENABLE="true" \
+    REDIS_BIND_ADDRESS="0.0.0.0" \
+    REDIS_BIND_PORT="6379" \
+    REDIS_SHARDING_ENABLED="true" \
+    REDIS_SHARDING_NUM_SHARDS="16" \
+    PG_ENABLE="true" \
+    PG_BIND_ADDRESS="0.0.0.0" \
+    PG_BIND_PORT="5432" \
+    PG_DATABASE="default" \
+    PG_AUTH_MODE="trust" \
+    KAFKA_ENABLE="true" \
+    KAFKA_BIND_ADDRESS="0.0.0.0" \
+    KAFKA_BIND_PORT="9092" \
+    KAFKA_DEFAULT_DATABASE="default"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -52,7 +73,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Run the application
 ENTRYPOINT ["sh", "-c", "java -Xmx2g -Xms1g \
-  -Dlog4j.configuration=log4j.properties \
+  -Dlog4j.configurationFile=classpath:log4j2.xml \
   -Dfluss.bootstrap.servers=${FLUSS_BOOTSTRAP} \
   -Dhbase.zookeeper.quorum=${ZK_QUORUM} \
   -Dhbase.compat.bind.address=${BIND_ADDRESS} \

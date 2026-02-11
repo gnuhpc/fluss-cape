@@ -425,12 +425,248 @@ If issues persist:
 
 ---
 
+## Production Deployment - Multi-Instance (Distributed Transactions)
+
+**✅ NEW**: Multi-instance Redis deployments now support distributed transactions without sticky sessions!
+
+**What Changed**:
+- **Transactions (MULTI/EXEC)**: Now stored in Fluss, work across any instance
+- **Blocking Operations (BLPOP/BRPOP)**: Still require sticky sessions OR use Redis Streams instead
+
+### Recommended Architecture
+
+```
+                          ┌─────────────┐
+                          │Load Balancer│
+                          │(Any Strategy)│
+                          └──────┬──────┘
+                                 │
+              ┌──────────────────┼──────────────────┐
+              │                  │                  │
+         ┌────▼────┐        ┌────▼────┐       ┌────▼────┐
+         │ CAPE 1  │        │ CAPE 2  │       │ CAPE 3  │
+         │ :6379   │        │ :6379   │       │ :6379   │
+         └────┬────┘        └────┬────┘       └────┬────┘
+              │                  │                  │
+              └──────────────────┼──────────────────┘
+                                 │
+                          ┌──────▼──────┐
+                          │    Fluss    │
+                          │   Cluster   │
+                          │  (Stores TX)│
+                          └─────────────┘
+```
+
+### Docker Compose Example with HAProxy
+
+**1. Create `haproxy.cfg`** (no sticky sessions needed for transactions):
+
+```haproxy
+global
+    log stdout format raw local0
+    maxconn 4096
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    timeout connect 5000ms
+    timeout client  30000ms
+    timeout server  30000ms
+
+frontend redis_frontend
+    bind *:6379
+    default_backend redis_backend
+
+backend redis_backend
+    balance roundrobin
+    
+    # Health checks
+    option tcp-check
+    tcp-check connect
+    tcp-check send PING\r\n
+    tcp-check expect string +PONG
+    
+    server cape1 cape1:6379 check inter 5s fall 3 rise 2
+    server cape2 cape2:6379 check inter 5s fall 3 rise 2
+    server cape3 cape3:6379 check inter 5s fall 3 rise 2
+```
+
+**2. Create `docker-compose.yml`**:
+
+```yaml
+version: '3.8'
+
+services:
+  # Load Balancer (no sticky sessions needed for transactions!)
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: fluss-haproxy
+    ports:
+      - "6379:6379"     # Redis protocol
+      - "8404:8404"     # HAProxy stats
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - cape1
+      - cape2
+      - cape3
+    networks:
+      - fluss-network
+
+  # CAPE Instance 1
+  cape1:
+    image: fluss-cape:1.0.0
+    container_name: fluss-cape-1
+    environment:
+      - FLUSS_BOOTSTRAP=fluss:9123
+      - REDIS_PORT=6379
+      - REDIS_ENABLE=true
+      - HEALTH_PORT=8080
+      - INSTANCE_ID=cape-1
+    networks:
+      - fluss-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # CAPE Instance 2
+  cape2:
+    image: fluss-cape:1.0.0
+    container_name: fluss-cape-2
+    environment:
+      - FLUSS_BOOTSTRAP=fluss:9123
+      - REDIS_PORT=6379
+      - REDIS_ENABLE=true
+      - HEALTH_PORT=8080
+      - INSTANCE_ID=cape-2
+    networks:
+      - fluss-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # CAPE Instance 3
+  cape3:
+    image: fluss-cape:1.0.0
+    container_name: fluss-cape-3
+    environment:
+      - FLUSS_BOOTSTRAP=fluss:9123
+      - REDIS_PORT=6379
+      - REDIS_ENABLE=true
+      - HEALTH_PORT=8080
+      - INSTANCE_ID=cape-3
+    networks:
+      - fluss-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  fluss-network:
+    external: true  # Assumes Fluss runs in this network
+```
+
+**3. Deploy**:
+
+```bash
+# Start all instances
+docker-compose up -d
+
+# Check HAProxy stats
+curl http://localhost:8404/stats
+
+# Test sticky sessions
+redis-cli -p 6379
+```
+
+**4. Verify Sticky Sessions**:
+
+```bash
+# Connect to load balancer
+redis-cli -p 6379
+
+# Test distributed transaction (works across ANY instances!)
+> MULTI
+OK
+> SET key1 "value1"
+QUEUED
+> SET key2 "value2"
+QUEUED
+> EXEC
+1) OK
+2) OK
+
+# Verify keys exist
+> MGET key1 key2
+1) "value1"
+2) "value2"
+
+# Note: Blocking operations (BLPOP/BRPOP) still require sticky sessions
+# Or better: Use Redis Streams instead!
+> XADD mystream * message "hello"
+> XREAD COUNT 1 STREAMS mystream 0
+```
+
+### Alternative: Use Streams Instead of Blocking Lists
+
+Redis Streams work perfectly in multi-instance deployments:
+
+```bash
+# Producer
+> XADD workqueue * task "process_video" priority "high"
+
+# Consumer (can connect to any instance)
+> XREADGROUP GROUP workers consumer1 COUNT 1 STREAMS workqueue >
+```
+
+### Kubernetes Deployment
+
+For Kubernetes, no special session affinity needed for transactions:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluss-cape-redis
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+  selector:
+    app: fluss-cape
+```
+
+### Production Checklist
+
+Before deploying to production:
+
+- [ ] **Transactions tested** across load balancer (MULTI/EXEC)
+- [ ] **Health checks enabled** for all instances
+- [ ] **Monitoring configured** (metrics, logs)
+- [ ] **Failover tested** (kill instance, verify recovery)
+- [ ] **Connection pool limits** set appropriately
+- [ ] **Backup/restore** strategy documented
+- [ ] **Using Streams instead of BLPOP/BRPOP** (recommended)
+
+For detailed explanation, see [Redis Guide - Multi-Instance Deployment](REDIS-GUIDE.md#-multi-instance-deployment---distributed-transaction-support).
+
+---
+
 ## Next Steps
 
 Now that you have CAPE running:
 
 - **[HBase Guide](HBASE-GUIDE.md)** - Learn HBase API usage with Spark and Phoenix
-- **[Redis Guide](REDIS-GUIDE.md)** - Explore all 131 supported Redis commands
+- **[Redis Guide](REDIS-GUIDE.md)** - Explore all 131 supported Redis commands with distributed transactions
 - **[PostgreSQL Guide](PGSQL-GUIDE.md)** - Query Fluss via standard SQL and PG clients
 - **[Configuration Reference](CONFIGURATION.md)** - Fine-tune CAPE for production
 

@@ -19,13 +19,20 @@ package org.gnuhpc.fluss.cape.kafka.consumer;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
+import org.gnuhpc.fluss.cape.kafka.converter.TablePathResolver;
 import org.slf4j.Logger;
+
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
@@ -38,7 +45,7 @@ public class ConsumerGroupCoordinatorV2 implements AutoCloseable {
     
     private static final Logger LOG = LoggerFactory.getLogger(ConsumerGroupCoordinatorV2.class);
     
-    private static final String DATABASE = "default";
+    private final String database;
     
     private final Connection flussConnection;
     private final CompletableFuture<Void> initializationFuture;
@@ -51,8 +58,9 @@ public class ConsumerGroupCoordinatorV2 implements AutoCloseable {
     private final ScheduledExecutorService heartbeatExecutor;
     private final ConcurrentHashMap<String, ConsumerGroupState> groupStates;
     
-    public ConsumerGroupCoordinatorV2(Connection flussConnection) {
+    public ConsumerGroupCoordinatorV2(Connection flussConnection, String database) {
         this.flussConnection = flussConnection;
+        this.database = database == null || database.isBlank() ? "default" : database;
         this.groupStates = new ConcurrentHashMap<>();
         
         this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -69,8 +77,8 @@ public class ConsumerGroupCoordinatorV2 implements AutoCloseable {
     private CompletableFuture<Void> initializeAsync() {
         return ensureTablesExistAsync()
             .thenCompose(v -> {
-                TablePath groupTablePath = new TablePath(DATABASE, ConsumerGroupSchemas.CONSUMER_GROUPS_TABLE);
-                TablePath offsetTablePath = new TablePath(DATABASE, ConsumerGroupSchemas.CONSUMER_OFFSETS_TABLE);
+                TablePath groupTablePath = new TablePath(database, ConsumerGroupSchemas.CONSUMER_GROUPS_TABLE);
+                TablePath offsetTablePath = new TablePath(database, ConsumerGroupSchemas.CONSUMER_OFFSETS_TABLE);
                 
                 return retryGetTables(groupTablePath, offsetTablePath, 5, 1000);
             })
@@ -128,8 +136,8 @@ public class ConsumerGroupCoordinatorV2 implements AutoCloseable {
     private CompletableFuture<Void> ensureTablesExistAsync() {
         Admin admin = flussConnection.getAdmin();
         
-        TablePath groupTablePath = new TablePath(DATABASE, ConsumerGroupSchemas.CONSUMER_GROUPS_TABLE);
-        TablePath offsetTablePath = new TablePath(DATABASE, ConsumerGroupSchemas.CONSUMER_OFFSETS_TABLE);
+        TablePath groupTablePath = new TablePath(database, ConsumerGroupSchemas.CONSUMER_GROUPS_TABLE);
+        TablePath offsetTablePath = new TablePath(database, ConsumerGroupSchemas.CONSUMER_OFFSETS_TABLE);
         
         return admin.tableExists(groupTablePath)
             .thenCompose(groupExists -> {
@@ -210,18 +218,28 @@ public class ConsumerGroupCoordinatorV2 implements AutoCloseable {
     }
     
     public ConsumerGroupState getOrCreateGroupState(String groupId) {
+        if (groupLookuper == null) {
+            LOG.warn("Consumer group coordinator not initialized; using in-memory state for {}", groupId);
+            return groupStates.computeIfAbsent(groupId, ConsumerGroupState::new);
+        }
         return groupStates.computeIfAbsent(groupId, id -> {
             try {
-                InternalRow groupRow = null;
-                if (groupRow != null) {
-                    return ConsumerGroupState.fromRow(groupRow);
+                GenericRow keyRow = GenericRow.of(BinaryString.fromString(groupId));
+                LookupResult lookupResult = groupLookuper.lookup(keyRow).get();
+                
+                if (lookupResult != null && !lookupResult.getRowList().isEmpty()) {
+                    InternalRow groupRow = lookupResult.getRowList().get(0);
+                    ConsumerGroupState loadedState = ConsumerGroupState.fromRow(groupRow);
+                    LOG.info("Loaded existing consumer group state for {} from Fluss: state={}, generation={}", 
+                            groupId, loadedState.getState(), loadedState.getGenerationId());
+                    return loadedState;
                 } else {
                     ConsumerGroupState newState = new ConsumerGroupState(groupId);
-                    LOG.info("Created new consumer group state for {}", groupId);
+                    LOG.info("Created new consumer group state for {} (no existing state found in Fluss)", groupId);
                     return newState;
                 }
             } catch (Exception e) {
-                LOG.error("Error loading group state for {}", groupId, e);
+                LOG.error("Error loading group state for {} from Fluss, falling back to new state", groupId, e);
                 return new ConsumerGroupState(groupId);
             }
         });

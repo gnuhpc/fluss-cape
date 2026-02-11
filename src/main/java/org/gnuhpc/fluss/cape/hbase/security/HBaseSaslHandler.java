@@ -19,9 +19,9 @@ package org.gnuhpc.fluss.cape.hbase.security;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.ByteToMessageDecoder;
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.ByteToMessageDecoder;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

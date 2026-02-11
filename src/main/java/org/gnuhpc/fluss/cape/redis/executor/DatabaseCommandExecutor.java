@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.gnuhpc.fluss.cape.redis.protocol.RedisCommand;
 import org.gnuhpc.fluss.cape.redis.protocol.RedisResponse;
@@ -106,7 +107,7 @@ public class DatabaseCommandExecutor implements RedisCommandExecutor {
             int deletedCount = 0;
             for (String key : allKeys) {
                 try {
-                    adapter.delete(key.getBytes());
+                    adapter.delete(key.getBytes(StandardCharsets.UTF_8));
                     deletedCount++;
                 } catch (Exception e) {
                     LOG.warn("Failed to delete key '{}'", key, e);

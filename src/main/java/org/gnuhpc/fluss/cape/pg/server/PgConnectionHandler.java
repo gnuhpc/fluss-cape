@@ -68,6 +68,7 @@ public class PgConnectionHandler extends SimpleChannelInboundHandler<PgFrontendM
     private static final Logger LOG = LoggerFactory.getLogger(PgConnectionHandler.class);
 
     private final PgAuthConfig authConfig;
+    private final String defaultDatabase;
     private final PgSession session;
     private final PgCommandRouter router;
     private final int backendProcessId;
@@ -75,9 +76,16 @@ public class PgConnectionHandler extends SimpleChannelInboundHandler<PgFrontendM
     private boolean authenticated;
     private boolean passwordRequested;
 
-    public PgConnectionHandler(PgAuthConfig authConfig, Connection flussConnection, Admin admin) {
+    public PgConnectionHandler(
+            PgAuthConfig authConfig,
+            Connection flussConnection,
+            Admin admin,
+            String defaultDatabase) {
         super(false);
         this.authConfig = authConfig;
+        this.defaultDatabase = defaultDatabase == null || defaultDatabase.isBlank()
+                ? "default"
+                : defaultDatabase;
         this.session = new PgSession();
         this.session.setFlussConnection(flussConnection);
         this.session.setFlussAdmin(admin);
@@ -153,7 +161,11 @@ public class PgConnectionHandler extends SimpleChannelInboundHandler<PgFrontendM
         String database = message.getParameter("database");
         
         session.setUsername(username);
-        session.setDatabase(database != null ? database : "default");
+        if (database != null && !database.isBlank()) {
+            session.setDatabase(database);
+        } else {
+            session.setDatabase(defaultDatabase);
+        }
         
         LOG.info("Client connecting to database: {}", session.getDatabase());
         

@@ -20,6 +20,10 @@ package org.gnuhpc.fluss.cape.redis.auth;
 import io.netty.channel.Channel;
 import io.netty.util.AttributeKey;
 
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
  * Stores per-connection authentication state for Redis protocol.
  *
@@ -41,28 +45,26 @@ import io.netty.util.AttributeKey;
  */
 public class RedisConnectionContext {
 
-    // Channel attribute key for storing context
     private static final AttributeKey<RedisConnectionContext> CONTEXT_KEY =
             AttributeKey.valueOf("redis.connection.context");
 
     private volatile boolean authenticated;
     private final long connectionTime;
-    private volatile long requestCount;
-    private volatile long lastRequestTime;
+    private final AtomicLong requestCount;
+    private final AtomicLong lastRequestTime;
     
-    // Rate limiting for AUTH command (brute force prevention)
-    private volatile int failedAuthAttempts;
-    private volatile long lastFailedAuthTime;
-    private volatile long authBlockedUntil;
+    private final AtomicInteger failedAuthAttempts;
+    private final AtomicLong lastFailedAuthTime;
+    private final AtomicLong authBlockedUntil;
 
     private RedisConnectionContext() {
         this.authenticated = false;
         this.connectionTime = System.currentTimeMillis();
-        this.requestCount = 0;
-        this.lastRequestTime = connectionTime;
-        this.failedAuthAttempts = 0;
-        this.lastFailedAuthTime = 0;
-        this.authBlockedUntil = 0;
+        this.requestCount = new AtomicLong(0);
+        this.lastRequestTime = new AtomicLong(connectionTime);
+        this.failedAuthAttempts = new AtomicInteger(0);
+        this.lastFailedAuthTime = new AtomicLong(0);
+        this.authBlockedUntil = new AtomicLong(0);
     }
 
     /**
@@ -114,8 +116,8 @@ public class RedisConnectionContext {
      * @return the new request count
      */
     public long incrementRequestCount() {
-        this.lastRequestTime = System.currentTimeMillis();
-        return ++this.requestCount;
+        lastRequestTime.set(System.currentTimeMillis());
+        return requestCount.incrementAndGet();
     }
 
     /**
@@ -124,7 +126,7 @@ public class RedisConnectionContext {
      * @return request count
      */
     public long getRequestCount() {
-        return requestCount;
+        return requestCount.get();
     }
 
     /**
@@ -133,7 +135,7 @@ public class RedisConnectionContext {
      * @return last request time
      */
     public long getLastRequestTime() {
-        return lastRequestTime;
+        return lastRequestTime.get();
     }
 
     /**
@@ -151,7 +153,7 @@ public class RedisConnectionContext {
      * @return idle time
      */
     public long getIdleTime() {
-        return System.currentTimeMillis() - lastRequestTime;
+        return System.currentTimeMillis() - lastRequestTime.get();
     }
 
     /**
@@ -161,7 +163,7 @@ public class RedisConnectionContext {
      */
     public boolean isAuthRateLimited() {
         long now = System.currentTimeMillis();
-        return authBlockedUntil > now;
+        return authBlockedUntil.get() > now;
     }
 
     /**
@@ -171,7 +173,7 @@ public class RedisConnectionContext {
      */
     public long getAuthBlockedRemaining() {
         long now = System.currentTimeMillis();
-        long remaining = authBlockedUntil - now;
+        long remaining = authBlockedUntil.get() - now;
         return Math.max(0, remaining);
     }
 
@@ -193,20 +195,18 @@ public class RedisConnectionContext {
     public long recordFailedAuthAttempt() {
         long now = System.currentTimeMillis();
         
-        // Reset counter if last failure was more than 60 seconds ago
-        if (now - lastFailedAuthTime > 60000) {
-            failedAuthAttempts = 0;
+        if (now - lastFailedAuthTime.get() > 60000) {
+            failedAuthAttempts.set(0);
         }
         
-        failedAuthAttempts++;
-        lastFailedAuthTime = now;
+        int attempts = failedAuthAttempts.incrementAndGet();
+        lastFailedAuthTime.set(now);
         
-        // Calculate exponential backoff: 2^(attempts-3) seconds, capped at 8 seconds
         long blockDurationMs = 0;
-        if (failedAuthAttempts >= 3) {
-            int exponent = Math.min(failedAuthAttempts - 3, 3); // Cap at 2^3 = 8 seconds
+        if (attempts >= 3) {
+            int exponent = Math.min(attempts - 3, 3);
             blockDurationMs = (long) Math.pow(2, exponent) * 1000;
-            authBlockedUntil = now + blockDurationMs;
+            authBlockedUntil.set(now + blockDurationMs);
         }
         
         return blockDurationMs;
@@ -216,9 +216,9 @@ public class RedisConnectionContext {
      * Reset failed authentication attempts (called on successful auth).
      */
     public void resetFailedAuthAttempts() {
-        failedAuthAttempts = 0;
-        lastFailedAuthTime = 0;
-        authBlockedUntil = 0;
+        failedAuthAttempts.set(0);
+        lastFailedAuthTime.set(0);
+        authBlockedUntil.set(0);
     }
 
     /**
@@ -227,7 +227,7 @@ public class RedisConnectionContext {
      * @return failed attempt count
      */
     public int getFailedAuthAttempts() {
-        return failedAuthAttempts;
+        return failedAuthAttempts.get();
     }
 
     @Override
@@ -238,7 +238,7 @@ public class RedisConnectionContext {
                 + ", connectionTime="
                 + connectionTime
                 + ", requestCount="
-                + requestCount
+                + requestCount.get()
                 + ", connectionAge="
                 + getConnectionAge()
                 + "ms, idleTime="

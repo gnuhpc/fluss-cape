@@ -23,7 +23,7 @@
 
     <groupId>org.gnuhpc</groupId>
     <artifactId>fluss-cape</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.4-SNAPSHOT</version>
     <name>Fluss CAPE (Compatibility And Protocol Extensions)</name>
     <description>HBase and Redis protocol compatibility layer for Apache Fluss with distributed deployment support</description>
     <packaging>jar</packaging>
@@ -34,7 +34,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         
         <!-- Dependency versions -->
-        <fluss.version>0.8.0-incubating</fluss.version>
+        <fluss.version>0.9-SNAPSHOT</fluss.version>
         <hbase.version>2.5.5</hbase.version>
         <hadoop.version>2.10.2</hadoop.version>
         <netty.version>4.1.108.Final</netty.version>
@@ -188,6 +188,14 @@
                     <groupId>org.slf4j</groupId>
                     <artifactId>slf4j-log4j12</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -233,16 +241,26 @@
         </dependency>
 
         <!-- Logging -->
+        <!-- Use Log4j2 (SLF4J binding) -->
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j-impl</artifactId>
+            <version>2.20.0</version>
         </dependency>
-
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>${slf4j.version}</version>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.20.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.20.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-1.2-api</artifactId>
+            <version>2.20.0</version>
         </dependency>
 
         <!-- Test Dependencies -->
@@ -332,7 +350,7 @@
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.gnuhpc.fluss.cape.hbase.server.CAPEServerLauncher</mainClass>
+                                    <mainClass>org.gnuhpc.fluss.cape.launcher.CAPEApplication</mainClass>
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>

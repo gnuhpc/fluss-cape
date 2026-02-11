@@ -16,6 +16,7 @@
  */
 
 package org.gnuhpc.fluss.cape.redis.executor;
+import java.nio.charset.StandardCharsets;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.metadata.TablePath;
@@ -320,9 +321,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
         for (long i = start; i <= stop && i < totalCount; i++) {
             RedisSingleTableAdapter.KeyValue kv = items.get((int) i);
             ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
-            results.add(sm.member.getBytes());
+            results.add(sm.member.getBytes(StandardCharsets.UTF_8));
             if (withScores) {
-                results.add(String.valueOf(sm.score).getBytes());
+                results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
             }
         }
 
@@ -358,7 +359,7 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             return RedisResponse.nullBulkString();
         }
 
-        return RedisResponse.bulkString(String.valueOf(score).getBytes());
+        return RedisResponse.bulkString(String.valueOf(score).getBytes(StandardCharsets.UTF_8));
     }
 
     private RedisMessage executeZCard(RedisCommand command) throws Exception {
@@ -456,9 +457,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             try {
                 ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
                 if (sm.score >= minScore && sm.score <= maxScore) {
-                    results.add(sm.member.getBytes());
+                    results.add(sm.member.getBytes(StandardCharsets.UTF_8));
                     if (withScores) {
-                        results.add(String.valueOf(sm.score).getBytes());
+                        results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
                     }
                 }
             } catch (Exception e) {
@@ -513,7 +514,7 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
         adapter.setByCompositeKey(key, REDIS_TYPE, newSubKey, EMPTY_VALUE, newScore);
         reverseIndex.setMemberScore(key, member, newScore);
 
-        return RedisResponse.bulkString(String.valueOf(newScore).getBytes());
+        return RedisResponse.bulkString(String.valueOf(newScore).getBytes(StandardCharsets.UTF_8));
     }
 
     private RedisMessage executeZCount(RedisCommand command) throws Exception {
@@ -740,8 +741,8 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             RedisSingleTableAdapter.KeyValue kv = items.get(i);
             try {
                 ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
-                results.add(sm.member.getBytes());
-                results.add(String.valueOf(sm.score).getBytes());
+                results.add(sm.member.getBytes(StandardCharsets.UTF_8));
+                results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
                 // Remove from storage
                 adapter.deleteByCompositeKey(key, kv.subKey);
@@ -812,8 +813,8 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             RedisSingleTableAdapter.KeyValue kv = items.get(i);
             try {
                 ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
-                results.add(sm.member.getBytes());
-                results.add(String.valueOf(sm.score).getBytes());
+                results.add(sm.member.getBytes(StandardCharsets.UTF_8));
+                results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
                 // Remove from storage
                 adapter.deleteByCompositeKey(key, kv.subKey);
@@ -904,9 +905,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             RedisSingleTableAdapter.KeyValue kv = items.get((int) i);
             try {
                 ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
-                results.add(sm.member.getBytes());
+                results.add(sm.member.getBytes(StandardCharsets.UTF_8));
                 if (withScores) {
-                    results.add(String.valueOf(sm.score).getBytes());
+                    results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
                 }
             } catch (Exception e) {
                 // Skip invalid entries
@@ -983,9 +984,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             try {
                 ScoreEncoder.ScoreMember sm = ScoreEncoder.decodeWithMember(kv.subKey);
                 if (sm.score >= minScore && sm.score <= maxScore) {
-                    results.add(sm.member.getBytes());
+                    results.add(sm.member.getBytes(StandardCharsets.UTF_8));
                     if (withScores) {
-                        results.add(String.valueOf(sm.score).getBytes());
+                        results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
                     }
                 }
             } catch (Exception e) {
@@ -1218,7 +1219,7 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
         // Single member without count
         if (command.getArgCount() == 1) {
             ScoreEncoder.ScoreMember sm = members.get(random.nextInt(members.size()));
-            return RedisResponse.bulkString(sm.member.getBytes());
+            return RedisResponse.bulkString(sm.member.getBytes(StandardCharsets.UTF_8));
         }
 
         // Multiple members
@@ -1227,9 +1228,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             // Allow duplicates - simple random selection with replacement
             for (long i = 0; i < count; i++) {
                 ScoreEncoder.ScoreMember sm = members.get(random.nextInt(members.size()));
-                results.add(sm.member.getBytes());
+                results.add(sm.member.getBytes(StandardCharsets.UTF_8));
                 if (withScores) {
-                    results.add(String.valueOf(sm.score).getBytes());
+                    results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
                 }
             }
         } else {
@@ -1238,9 +1239,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
             long limit = Math.min(count, members.size());
             for (int i = 0; i < limit; i++) {
                 ScoreEncoder.ScoreMember sm = members.get(i);
-                results.add(sm.member.getBytes());
+                results.add(sm.member.getBytes(StandardCharsets.UTF_8));
                 if (withScores) {
-                    results.add(String.valueOf(sm.score).getBytes());
+                    results.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
                 }
             }
         }
@@ -1443,9 +1444,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
                     .sorted(Map.Entry.<String, Double>comparingByValue()
                             .thenComparing(Map.Entry.comparingByKey()))
                     .forEach(entry -> {
-                        results.add(entry.getKey().getBytes());
+                        results.add(entry.getKey().getBytes(StandardCharsets.UTF_8));
                         if (withScores) {
-                            results.add(String.valueOf(entry.getValue()).getBytes());
+                            results.add(String.valueOf(entry.getValue()).getBytes(StandardCharsets.UTF_8));
                         }
                     });
 
@@ -1545,7 +1546,7 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
 
         if (expirationManager.checkAndDeleteIfExpired(key)) {
             List<RedisMessage> result = new ArrayList<>();
-            result.add(RedisResponse.bulkString("0".getBytes()));
+            result.add(RedisResponse.bulkString("0".getBytes(StandardCharsets.UTF_8)));
             result.add(RedisResponse.bytesArray(Collections.emptyList()));
             return RedisResponse.array(result);
         }
@@ -1558,7 +1559,7 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
 
         if (existingType == null) {
             List<RedisMessage> result = new ArrayList<>();
-            result.add(RedisResponse.bulkString("0".getBytes()));
+            result.add(RedisResponse.bulkString("0".getBytes(StandardCharsets.UTF_8)));
             result.add(RedisResponse.bytesArray(Collections.emptyList()));
             return RedisResponse.array(result);
         }
@@ -1589,11 +1590,11 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
 
         List<byte[]> resultBytes = new ArrayList<>();
         for (String item : scanResult.items) {
-            resultBytes.add(item.getBytes());
+            resultBytes.add(item.getBytes(StandardCharsets.UTF_8));
         }
 
         List<RedisMessage> result = new ArrayList<>();
-        result.add(RedisResponse.bulkString(String.valueOf(scanResult.nextCursor).getBytes()));
+        result.add(RedisResponse.bulkString(String.valueOf(scanResult.nextCursor).getBytes(StandardCharsets.UTF_8)));
         result.add(RedisResponse.bytesArray(resultBytes));
 
         return RedisResponse.array(result);
@@ -1634,9 +1635,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
         metadataManager.saveZSetMetadata(key, REDIS_TYPE, metadata);
 
         List<byte[]> response = new ArrayList<>();
-        response.add(key.getBytes());
-        response.add(sm.member.getBytes());
-        response.add(String.valueOf(sm.score).getBytes());
+        response.add(key.getBytes(StandardCharsets.UTF_8));
+        response.add(sm.member.getBytes(StandardCharsets.UTF_8));
+        response.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
         return RedisResponse.bytesArray(response);
     }
@@ -1677,9 +1678,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
         metadataManager.saveZSetMetadata(key, REDIS_TYPE, metadata);
 
         List<byte[]> response = new ArrayList<>();
-        response.add(key.getBytes());
-        response.add(sm.member.getBytes());
-        response.add(String.valueOf(sm.score).getBytes());
+        response.add(key.getBytes(StandardCharsets.UTF_8));
+        response.add(sm.member.getBytes(StandardCharsets.UTF_8));
+        response.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
         return RedisResponse.bytesArray(response);
     }
@@ -1732,9 +1733,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
                         metadataManager.saveZSetMetadata(key, REDIS_TYPE, metadata);
 
                         List<byte[]> response = new ArrayList<>();
-                        response.add(key.getBytes());
-                        response.add(sm.member.getBytes());
-                        response.add(String.valueOf(sm.score).getBytes());
+                        response.add(key.getBytes(StandardCharsets.UTF_8));
+                        response.add(sm.member.getBytes(StandardCharsets.UTF_8));
+                        response.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
                         return RedisResponse.bytesArray(response);
                     }
@@ -1795,9 +1796,9 @@ public class SortedSetCommandExecutor implements BlockingAwareExecutor {
                         metadataManager.saveZSetMetadata(key, REDIS_TYPE, metadata);
 
                         List<byte[]> response = new ArrayList<>();
-                        response.add(key.getBytes());
-                        response.add(sm.member.getBytes());
-                        response.add(String.valueOf(sm.score).getBytes());
+                        response.add(key.getBytes(StandardCharsets.UTF_8));
+                        response.add(sm.member.getBytes(StandardCharsets.UTF_8));
+                        response.add(String.valueOf(sm.score).getBytes(StandardCharsets.UTF_8));
 
                         return RedisResponse.bytesArray(response);
                     }

@@ -72,7 +72,7 @@ See [Table Mapping Architecture](TABLE-MAPPING.md) for detailed schema informati
 | Command | Status | Notes |
 |---------|--------|-------|
 | SET, GET, MSET, MGET | ✅ | Full support |
-| INCR, DECR, INCRBY, DECRBY | ✅ | Atomic operations |
+| INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT | ⚠️ | **Non-atomic read-modify-write. Includes overflow detection and type safety.** See [Non-Atomic Increment Operations](#-non-atomic-increment-operations) |
 | APPEND, STRLEN | ✅ | String manipulation |
 | GETRANGE, SETRANGE | ✅ | Substring operations |
 | SETEX, SETNX, PSETEX | ✅ | With expiration |
@@ -85,7 +85,7 @@ See [Table Mapping Architecture](TABLE-MAPPING.md) for detailed schema informati
 | HSET, HGET, HMSET, HMGET | ✅ | Field operations |
 | HGETALL, HKEYS, HVALS | ✅ | Bulk retrieval |
 | HDEL, HEXISTS | ✅ | Field management |
-| HINCRBY, HINCRBYFLOAT | ✅ | Atomic increment |
+| HINCRBY, HINCRBYFLOAT | ⚠️ | **Non-atomic increment with overflow detection** |
 | HLEN, HSETNX, HSTRLEN | ✅ | Metadata ops |
 
 ### Lists (18/20 - 90%)
@@ -117,7 +117,7 @@ See [Table Mapping Architecture](TABLE-MAPPING.md) for detailed schema informati
 | ZRANGE, ZREVRANGE | ✅ | Range queries |
 | ZRANGEBYSCORE, ZREVRANGEBYSCORE | ✅ | Score-based range |
 | ZRANK, ZREVRANK | ✅ | Rank queries |
-| ZSCORE, ZINCRBY | ✅ | Score operations |
+| ZSCORE, ZINCRBY | ⚠️ | **Non-atomic score operations with overflow detection** |
 | ZCOUNT, ZREMRANGEBYRANK | ✅ | Bulk operations |
 | ZUNION, ZINTER, ZDIFF | ✅ | Set operations |
 
@@ -853,31 +853,596 @@ for i in range(10):
 
 ---
 
+### 🔴 KEYS Command Performance Risk
+
+**CRITICAL: KEYS * Can Cause OutOfMemory and Production Outages**
+
+**Issue**: The KEYS command loads **ALL keys** from Fluss storage into memory and performs pattern matching in-process. This can cause severe performance degradation, memory exhaustion, and complete service outages in production environments.
+
+**Performance Impact**:
+
+| Key Count | Memory Usage | Execution Time | Event Loop Block | Production Risk |
+|-----------|--------------|----------------|------------------|-----------------|
+| 1K keys | ~100 KB | ~10ms | Negligible | 🟢 Safe |
+| 10K keys | ~1 MB | ~50ms | Minor | 🟢 Safe |
+| 100K keys | ~10 MB | ~500ms | Noticeable | 🟡 Caution - May impact latency |
+| 1M keys | ~100 MB | ~5s | Severe | 🔴 Dangerous - Blocks all requests |
+| 10M+ keys | ~1 GB+ | ~30s+ | Critical | 🔴 **OUTAGE RISK - OOM likely** |
+
+**Why This Happens**:
+
+```python
+# User runs KEYS command
+r.keys("user:*")
+
+# What happens internally:
+# 1. getAllKeys() performs FULL TABLE SCAN on Fluss
+# 2. ALL keys loaded into Java heap memory (Set<String>)
+# 3. Pattern matching executed in SINGLE THREAD
+# 4. Blocks Netty event loop (no other requests processed)
+# 5. Memory held until GC runs
+```
+
+**Real-World Failure Scenario**:
+
+```bash
+# Production system with 5M keys
+redis-cli -h production-cape
+
+> KEYS session:*
+# 30 seconds pass... server stops responding
+# Memory usage spikes from 2GB → 4GB
+# Other clients timeout waiting for responses
+# Service monitors trigger alerts
+# OutOfMemoryError thrown, CAPE crashes
+
+ERROR: java.lang.OutOfMemoryError: Java heap space
+  at KeyIterationCommandExecutor.getAllKeys()
+```
+
+**Root Cause**:
+
+1. **No streaming**: All keys materialized at once, no pagination
+2. **No backpressure**: Cannot stop/pause mid-execution
+3. **Blocks event loop**: Single-threaded execution in Netty worker thread
+4. **No memory limits**: Heap can grow until OOM
+
+**Solution: Use SCAN Instead**
+
+SCAN provides cursor-based iteration with bounded memory usage:
+
+```python
+# ❌ WRONG: KEYS loads all keys into memory
+all_keys = r.keys("user:*")  # OOM risk with large datasets
+
+# ✅ CORRECT: SCAN with cursor-based iteration
+cursor = 0
+user_keys = []
+while True:
+    cursor, keys = r.scan(cursor, match="user:*", count=1000)
+    user_keys.extend(keys)
+    if cursor == 0:
+        break
+    
+# Only ~1000 keys in memory at a time (configurable with COUNT)
+```
+
+**SCAN Advantages**:
+
+| Feature | KEYS | SCAN |
+|---------|------|------|
+| Memory usage | Unbounded (all keys) | Bounded (COUNT parameter) |
+| Blocking | Blocks until complete | Non-blocking (client controls pace) |
+| Production safety | ❌ Dangerous | ✅ Safe |
+| Event loop impact | Blocks event loop | Yields between batches |
+| Max dataset size | ~100K keys | Unlimited |
+
+**SCAN Usage Examples**:
+
+```python
+# Basic SCAN (returns 10 keys by default)
+cursor, keys = r.scan(0)
+
+# SCAN with pattern matching
+cursor, keys = r.scan(0, match="user:*", count=100)
+
+# SCAN with larger batch size (better throughput)
+cursor, keys = r.scan(0, match="session:*", count=1000)
+
+# Complete iteration example
+def get_all_keys_safe(pattern="*", batch_size=1000):
+    """Safely retrieve all keys using SCAN."""
+    cursor = 0
+    all_keys = []
+    while True:
+        cursor, keys = r.scan(cursor, match=pattern, count=batch_size)
+        all_keys.extend(keys)
+        if cursor == 0:
+            break
+    return all_keys
+
+# Use it
+user_keys = get_all_keys_safe("user:*")
+```
+
+**When KEYS is Acceptable**:
+
+| Scenario | Safe? | Reason |
+|----------|-------|--------|
+| Development/local testing | ✅ Yes | Small datasets, no production impact |
+| Known dataset \u003c10K keys | ✅ Yes | Memory impact negligible |
+| CI/CD test environments | ✅ Yes | Isolated, not production |
+| Production debugging (emergency) | ⚠️ Caution | Only if you understand the risk |
+| Production hot path | ❌ **NEVER** | Will cause outages |
+| Background jobs in production | ❌ No | Use SCAN instead |
+
+**Production Recommendations**:
+
+- ✅ **Always use SCAN** in production code
+- ✅ **Set COUNT parameter** based on acceptable memory (100-1000 typically safe)
+- ✅ **Monitor memory usage** if KEYS must be used
+- ✅ **Add application warnings** when KEYS is detected
+- ⚠️ **Rate-limit KEYS** at load balancer level (if exposing to clients)
+- ⚠️ **Document the risk** if KEYS is exposed in your API
+- ❌ **NEVER use KEYS *** in production with \u003e100K keys
+- ❌ **Don't use KEYS** in loops or periodic jobs
+
+**Migration Example**:
+
+```python
+# Before (dangerous in production)
+def cleanup_expired_sessions():
+    for key in r.keys("session:*"):  # ❌ Loads all sessions into memory
+        if is_expired(key):
+            r.delete(key)
+
+# After (production-safe)
+def cleanup_expired_sessions():
+    cursor = 0
+    while True:
+        cursor, keys = r.scan(cursor, match="session:*", count=100)
+        for key in keys:
+            if is_expired(key):
+                r.delete(key)
+        if cursor == 0:
+            break
+```
+
+**Monitoring**:
+
+Track KEYS usage in production:
+
+```bash
+# Monitor KEYS command frequency (if exposed)
+redis-cli INFO commandstats | grep keys
+
+# Alert on high KEYS usage
+cmdstat_keys:calls=1234,usec=567890,usec_per_call=460.42
+
+# If calls > 100/hour in production → investigate
+```
+
+**Alternative: Disable KEYS in Production**
+
+If you control the CAPE deployment, consider disabling KEYS entirely:
+
+```java
+// In RedisCommandRouter.java, add check:
+if (command.equals("KEYS") && isProductionMode()) {
+    return RedisResponse.error(
+        "ERR KEYS disabled in production. Use SCAN instead. " +
+        "See https://redis.io/commands/scan/"
+    );
+}
+```
+
+**Summary**:
+
+- **KEYS = Danger** in production (OOM risk, event loop blocking)
+- **SCAN = Safe** for any dataset size (bounded memory, non-blocking)
+- **Migration is easy** - just use cursor-based iteration
+- **No exceptions** - SCAN is always better for production
+
+---
+
+### 🔴 Secondary Index Consistency Risk
+
+**CRITICAL: HGETALL, HKEYS, HLEN May Return Inconsistent Results**
+
+**Issue**: Hash and Sorted Set operations use a secondary index for efficient enumeration (HGETALL, HKEYS, ZRANGE). Due to Fluss storage limitations, the index update is **not atomic** with the main data write.
+
+**How It Works**:
+```
+HSET user:1 name Alice
+  ↓
+  1. Write main data: user:1 + name → Alice
+  2. Read current index: [email, age]  
+  3. Write updated index: [email, age, name]
+```
+
+**The Problem**: If a crash/failure occurs between steps 1 and 3:
+
+| Failure Point | Result | Impact |
+|---------------|--------|--------|
+| After step 1, before step 3 | **Orphan data** | Main data exists but index doesn't reference it |
+| After step 3, but step 1 fails | **Stale index** | Index references non-existent data |
+
+**Affected Commands**:
+
+| Command | Risk Level | Symptom |
+|---------|-----------|---------|
+| **HGETALL** | 🔴 High | May miss newly added fields or return deleted fields |
+| **HKEYS** | 🔴 High | May return incomplete key list |
+| **HVALS** | 🔴 High | May miss values |
+| **HLEN** | 🔴 High | May return incorrect count |
+| **ZRANGE** | 🔴 High | May miss members |
+| **HGET** | 🟢 Low | Not affected (queries main table directly) |
+| **ZRANK** | 🟢 Low | Not affected (computed from main data) |
+
+**Root Cause**: Fluss KV storage does **not** support:
+- Multi-table transactions
+- Two-phase commit (2PC)  
+- Atomic cross-table operations
+
+This is an architectural limitation, not a CAPE bug.
+
+**Real-World Example**:
+
+```python
+# Client A: Add field
+r.hset('product:123', 'price', '19.99')  # Write succeeds
+# >> CRASH HERE <<
+# Index not updated yet!
+
+# Client B: Read all fields  
+fields = r.hgetall('product:123')
+# Result: {'name': 'Widget', 'stock': '100'}
+# Missing 'price': '19.99' ❌
+```
+
+**Mitigation Strategies**:
+
+1. **Accept Eventual Consistency** (Recommended):
+   - Next write to the same key will fix the index
+   - Suitable for most use cases (caching, session storage)
+   
+2. **Use Point Queries**:
+   ```python
+   # Instead of HGETALL (uses index)
+   fields = ['name', 'price', 'stock']
+   values = r.hmget('product:123', fields)  # Direct queries, no index
+   ```
+
+3. **Run Periodic Reconciliation**:
+   - Background job scans main data and rebuilds index
+   - Example: nightly cron job
+   - See `tools/index-repair.py` (future enhancement)
+
+4. **Application-Level Retries**:
+   ```python
+   # Retry HGETALL if result seems incomplete
+   for attempt in range(3):
+       result = r.hgetall(key)
+       if is_complete(result):
+           break
+       time.sleep(0.1)
+   ```
+
+**Production Recommendations**:
+
+- ✅ **Understand the risk**: Index may lag main data by milliseconds to seconds
+- ✅ **Use for non-critical data**: Caching, session storage, leaderboards
+- ✅ **Monitor inconsistencies**: Track HLEN vs actual field count
+- ⚠️ **Avoid for critical data**: Financial records, inventory counts
+- ⚠️ **Don't rely on exact HLEN**: Use it as an approximation
+
+**When to Worry**:
+
+| Scenario | Risk | Action |
+|----------|------|--------|
+| Frequent writes | 🔴 High | More chances for inconsistency |
+| Server crashes common | 🔴 High | Index lags accumulate |
+| Read-heavy, rare writes | 🟢 Low | Index stays consistent |
+
+---
+
+### ⚠️ Non-Atomic Increment Operations
+
+**IMPORTANT**: All increment/decrement operations (INCR, DECR, INCRBY, DECRBY, INCRBYFLOAT, HINCRBY, HINCRBYFLOAT, ZINCRBY) are **NOT truly atomic** in CAPE.
+
+**Implementation**: These commands use read-modify-write pattern:
+```
+INCR counter
+  ↓
+  1. Read current value from Fluss
+  2. Add 1 in memory
+  3. Write new value to Fluss
+```
+
+**The Problem**: Race condition between concurrent increments:
+
+```
+Time  Client A          Client B          Fluss Value
+T0                                         counter=10
+T1    READ counter=10
+T2                      READ counter=10
+T3    WRITE counter=11
+T4                      WRITE counter=11  ❌ Should be 12!
+```
+
+**Impact by Command**:
+
+| Command | Use Case | Risk |
+|---------|----------|------|
+| **INCR/DECR** | Simple counters | 🟡 Medium - Lost updates under high concurrency |
+| **INCRBY** | Batch increments | 🟡 Medium - Same as INCR |
+| **HINCRBY** | Hash field counters | 🟡 Medium - Field-level race conditions |
+| **ZINCRBY** | Leaderboard scores | 🔴 High - Score inconsistencies in competitive scenarios |
+| **INCRBYFLOAT** | Floating point math | 🟡 Medium + precision errors |
+
+**Root Cause**: Fluss storage lacks atomic compare-and-swap (CAS) operations.
+
+**Mitigation Strategies**:
+
+1. **Accept Approximate Counts** (Recommended for most cases):
+   ```python
+   # Page view counter - occasional lost updates acceptable
+   r.incr('page:views')  # OK for analytics
+   ```
+
+2. **Use External Atomic Counter** (For critical counters):
+   ```python
+   # Financial transactions - use dedicated atomic counter service
+   from redis import Redis  # Real Redis, not CAPE
+   atomic_redis = Redis(host='atomic-redis.internal')
+   atomic_redis.incr('account:balance')  # Truly atomic
+   ```
+
+3. **Single-Writer Pattern** (Eliminates concurrency):
+   ```python
+   # Have ONE background worker increment counters
+   # All other processes send increment requests to queue
+   # Worker processes queue sequentially → no race conditions
+   ```
+
+4. **Batch and Reconcile** (For leaderboards):
+   ```python
+   # Buffer score changes locally
+   score_buffer[player_id] += points
+   
+   # Periodically flush to CAPE (with retry logic)
+   for player, total_points in score_buffer.items():
+       r.zincrby('leaderboard', total_points, player)
+   ```
+
+**When It's Safe**:
+
+| Scenario | Safety Level | Rationale |
+|----------|--------------|-----------|
+| Low-traffic counters | ✅ Safe | Rare concurrent access |
+| Single-writer scenarios | ✅ Safe | No concurrency |
+| Read-only after writes | ✅ Safe | No race condition |
+| High-concurrency counters | ❌ Unsafe | Frequent lost updates |
+| Financial calculations | ❌ Unsafe | Precision required |
+
+**Production Recommendations**:
+
+- ✅ **Use for approximate metrics**: Page views, cache hits, non-critical stats
+- ✅ **Document the limitation**: Make team aware of eventual consistency
+- ⚠️ **Avoid for money/inventory**: Use external atomic service
+- ⚠️ **Monitor divergence**: Compare INCR results with source-of-truth periodically
+- ⚠️ **Rate limit if critical**: Reduce concurrent access to same counter
+| Using HGET only | 🟢 Low | No index involved |
+
+**Future Improvements**:
+
+CAPE now includes several improvements for increment operations:
+- ✅ **Overflow Detection**: Uses `Math.addExact()` to detect and prevent integer overflow
+- ✅ **Type Safety**: Returns `WRONGTYPE` error when attempting INCR on non-string keys  
+- ✅ **UTF-8 Encoding**: Explicit charset handling prevents encoding issues
+- ✅ **Unified Implementation**: All increment/decrement logic consolidated in adapter layer
+
+**Roadmap for True Atomicity**:
+
+Fluss 0.8+ includes **merge engine** support ([documentation](https://fluss.apache.org/docs/table-design/table-types/pk-table/merge-engines/)) which enables server-side aggregation. Future CAPE versions could leverage this for truly atomic counters:
+
+```sql
+-- Future implementation using Fluss merge engine
+CREATE TABLE redis_counters (
+  key STRING,
+  delta BIGINT,
+  PRIMARY KEY (key)
+) WITH (
+  'merge-engine' = 'aggregation',
+  'fields.delta.aggregate-function' = 'sum'
+);
+
+-- Instead of read-modify-write:
+INCR counter → INSERT/UPDATE (key='counter', delta=1)
+-- Fluss aggregates deltas atomically on read
+```
+
+This would eliminate race conditions entirely. Track [CAPE Issue #XXX] for implementation status.
+
+Current limitations will persist until Fluss aggregation merge engine is integrated. Potential solutions:
+- Fluss aggregation merge engine integration (recommended)
+- Fluss implements multi-table transactions
+- CAPE adds write-ahead log for index updates
+- CAPE provides built-in reconciliation tool
+
+---
+
+### ✅ Multi-Instance Deployment - Distributed Transaction Support
+
+**BREAKING CHANGE (v0.9+)**: MULTI/EXEC transactions now work across multiple instances without sticky sessions.
+
+**What Changed**:
+- **Before**: Transaction state stored in local memory per connection
+- **After**: Transaction state stored in Fluss table `redis_internal_transactions`
+- **Impact**: Transactions work correctly even when commands route to different CAPE instances
+
+**How It Works**:
+
+```
+Client                Load Balancer        CAPE Instance A    CAPE Instance B        Fluss
+  │                         │                     │                 │                  │
+  ├─── MULTI ──────────────>│                     │                 │                  │
+  │                         ├────────────────────>│                 │                  │
+  │                         │                     ├─────────── Store TX (UUID) ───────>│
+  │                         │                     │                 │                  │
+  ├─── SET key val ────────>│                     │                 │                  │
+  │                         ├─────────────────────────────────────>│                  │
+  │                         │                     │                 ├─── Queue cmd ───>│
+  │                         │                     │                 │                  │
+  ├─── EXEC ───────────────>│                     │                 │                  │
+  │                         ├────────────────────>│                 │                  │
+  │                         │                     ├───── Retrieve TX + Execute ───────>│
+  │<────── [results] ───────┤<────────────────────┤                 │                  │
+```
+
+**Transaction Table Schema**:
+- **Table**: `{database}.redis_internal_transactions`
+- **Primary Key**: `txn_id` (UUID, globally unique across instances)
+- **Fields**:
+  - `client_id` - Connection tracking
+  - `commands` - GZIP-compressed command queue
+  - `status` - ACTIVE / COMMITTED / ROLLED_BACK
+  - `expires_at` - 5-minute TTL (automatic cleanup)
+
+**Load Balancer Configuration**:
+
+No sticky sessions required! Use any load balancing strategy:
+
+**HAProxy (Round-Robin)**:
+```haproxy
+backend redis_backend
+    mode tcp
+    balance roundrobin
+    server cape1 10.0.1.10:6379 check
+    server cape2 10.0.1.11:6379 check
+    server cape3 10.0.1.12:6379 check
+```
+
+**Nginx (Least Connections)**:
+```nginx
+stream {
+    upstream redis_backend {
+        least_conn;
+        server 10.0.1.10:6379;
+        server 10.0.1.11:6379;
+        server 10.0.1.12:6379;
+    }
+    server {
+        listen 6379;
+        proxy_pass redis_backend;
+    }
+}
+```
+
+**Benefits**:
+- ✅ No sticky session complexity
+- ✅ Better load distribution
+- ✅ Resilient to connection failures mid-transaction
+- ✅ Works with any load balancer (L4/L7)
+
+**Limitations**:
+
+| Limitation | Details |
+|------------|---------|
+| **Non-atomic state transitions** | Fluss lacks CAS operations; edge case race conditions possible if concurrent EXEC |
+| **5-minute transaction timeout** | Auto-cleanup of abandoned transactions |
+| **Blocking operations still require sticky sessions** | BLPOP/BRPOP use local connection state (not yet distributed) |
+
+**For Blocking Operations** (BLPOP/BRPOP/BLMOVE):
+
+Still require sticky sessions as these are not yet distributed:
+
+**HAProxy with Sticky Sessions for Blocking Ops**:
+```haproxy
+backend redis_backend
+    mode tcp
+    balance leastconn
+    stick-table type ip size 100k expire 30m
+    stick on src
+    server cape1 10.0.1.10:6379 check
+    server cape2 10.0.1.11:6379 check
+```
+
+**Testing Distributed Transactions**:
+
+```bash
+# Connect to load balancer
+redis-cli -p 6379
+
+# Test cross-instance transaction (no sticky sessions needed!)
+> MULTI
+OK
+> SET transaction:test:key1 "value1"
+QUEUED
+> SET transaction:test:key2 "value2"
+QUEUED
+> EXEC
+1) OK
+2) OK
+
+# Verify both keys exist
+> MGET transaction:test:key1 transaction:test:key2
+1) "value1"
+2) "value2"
+
+# Test transaction timeout (abandoned transactions auto-expire after 5 minutes)
+> MULTI
+OK
+> SET temp:key "temp:value"
+QUEUED
+# (disconnect without EXEC)
+
+# After 5 minutes, transaction automatically cleaned up from Fluss
+```
+
+**Troubleshooting**:
+
+| Symptom | Root Cause | Fix |
+|---------|-----------|-----|
+| Transaction table not created | Fluss connection issue or permissions | Check Fluss connection, verify database exists |
+| High transaction table size | Many abandoned transactions | Normal - automatic cleanup runs every minute |
+| Transaction timeout errors | Client holding transactions > 5 minutes | Execute EXEC faster or increase timeout in code |
+
+**Production Recommendations**:
+
+- ✅ **No special load balancer config needed** for transactions
+- ✅ **Use any load balancing strategy** (round-robin, least-conn, etc.)
+- ✅ **Monitor transaction table size** for abandoned transactions
+- ⚠️ **Blocking operations** (BLPOP/BRPOP) still need sticky sessions or use Streams alternative
+- ⚠️ **Execute transactions quickly** - 5-minute timeout is generous but not infinite
+
+**Alternative for Blocking Operations** (recommended):
+
+Instead of BLPOP/BRPOP, use Redis Streams which work across all instances:
+
+```bash
+# Producer
+> XADD mystream * message "hello"
+
+# Consumer (non-blocking, or use XREAD with BLOCK)
+> XREAD COUNT 1 STREAMS mystream 0
+```
+
+---
+
 ### Not Supported
 
-1. **Blocking Operations**: BLPOP, BRPOP (use polling instead)
-2. **Pub/Sub**: Limited support, use Fluss streams
-3. **Transactions**: MULTI/EXEC has limitations
-4. **Lua Scripts**: EVAL/EVALSHA not supported
-5. **Cluster Commands**: No CLUSTER commands
-6. **Replication**: Use Fluss replication instead
+1. **Lua Scripts**: EVAL/EVALSHA not supported
+2. **Cluster Commands**: No CLUSTER commands (use CAPE service discovery instead)
+3. **Replication Commands**: Use Fluss replication instead
+
+**Note**: Transactions (MULTI/EXEC) now work across multiple instances. Blocking operations (BLPOP, BRPOP, BLMOVE) still require sticky sessions or should be replaced with Redis Streams.
 
 ### Workarounds
 
-**Blocking Operations**:
+**Pub/Sub** (limited support - use Streams instead):
 ```python
-# Instead of BLPOP
-while True:
-    item = r.lpop('queue')
-    if item:
-        process(item)
-    else:
-        time.sleep(0.1)
-```
-
-**Pub/Sub**:
-```python
-# Use Streams instead
+# Use Streams for reliable message delivery
 r.xadd('channel', {'message': 'hello'})
 r.xread({'channel': last_id}, count=10)
 ```
