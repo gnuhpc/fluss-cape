@@ -44,13 +44,6 @@ Fluss CAPE is an external compatibility layer that enables applications to inter
 
 ---
 
-## ⚠️ Important Notes
-
-### Fluss Version Compatibility
-- **Fluss 0.8.0**: Hash operations limited to 4 fields (buffer overflow bug) - use with caution
-- **Fluss 0.9**: Fixed buffer overflow but has Arrow WAL bug (#2346) - use with caution
-- **Recommendation**: Both versions have limitations - choose based on your specific needs
-
 For details, see [ARCHITECTURE.md](ARCHITECTURE.md) for design overview and [docs/](docs/) for comprehensive guides.
 
 ---
