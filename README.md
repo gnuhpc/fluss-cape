@@ -57,6 +57,8 @@ For details, see [ARCHITECTURE.md](ARCHITECTURE.md) for design overview and [doc
 
 ### Build and Run
 
+> **Note**: Fluss CAPE currently depends on **Apache Fluss 0.9-SNAPSHOT**. Please ensure you have built and installed Fluss 0.9-SNAPSHOT locally before building CAPE.
+
 ```bash
 # Clone repository
 git clone https://github.com/gnuhpc/fluss-cape.git
