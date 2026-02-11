@@ -2,17 +2,17 @@
 
 **C**ompatibility **A**nd **P**rotocol **E**xtensions for Apache Fluss
 
-Transform Apache Fluss into a multi-model database by adding HBase, Redis, and PostgreSQL protocol compatibility.
+Transform Apache Fluss into a multi-model database by adding HBase, Redis, Kafka, and PostgreSQL protocol compatibility.
 
 ---
 
 ## 🎯 What is Fluss CAPE?
 
-Fluss CAPE is an external compatibility layer that enables applications to interact with [Apache Fluss](https://github.com/alibaba/fluss) using familiar HBase, Redis, and PostgreSQL protocols—without modifying Fluss itself.
+Fluss CAPE is an external compatibility layer that enables applications to interact with [Apache Fluss](https://github.com/alibaba/fluss) using familiar HBase, Redis, Kafka, and PostgreSQL protocols—without modifying Fluss itself.
 
 **Key Benefits:**
 - 🔌 **Zero Fluss Modifications** - Runs as a standalone translation layer
-- 🚀 **Instant Migration** - Use existing HBase/Redis/PostgreSQL applications with Fluss
+- 🚀 **Instant Migration** - Use existing HBase/Redis/Kafka/PostgreSQL applications with Fluss
 - 🔄 **Unified Storage** - Access the same data through multiple protocols
 - ⚡ **Scalable** - Horizontal scaling with multiple CAPE instances
 - 📊 **Production-Ready** - Multiple deployment modes (standalone, clustered, co-located)
@@ -35,6 +35,12 @@ Fluss CAPE is an external compatibility layer that enables applications to inter
 - **Data Types**: Strings, Hashes, Sets, Lists, Sorted Sets, Streams, Geo, HyperLogLog, Pub/Sub
 - **Client Compatible**: Works with redis-cli, Python, Node.js, Java, and all standard Redis clients
 - **Persistent Storage**: All data durably stored in Fluss
+
+### Kafka Compatibility
+- **Wire Protocol Support**: Connect using any standard Kafka client (kafka-console-producer, kafka-python, librdkafka, etc.)
+- **Unified Messaging**: Seamlessly bridge Fluss changelogs and Kafka topics
+- **High Performance**: Low-latency message production and consumption
+- **Ecosystem Ready**: Integration with Kafka Connect, Schema Registry, and stream processing engines (Flink, Spark Streaming)
 
 ### PostgreSQL Compatibility
 - **Wire Protocol Support**: Connect using any standard PostgreSQL client (psql, DBeaver, etc.)
@@ -150,6 +156,20 @@ OK
 4) "200"
 ```
 
+### Use Kafka Protocol
+
+```bash
+# Produce messages
+kafka-console-producer.sh --bootstrap-server localhost:9092 --topic my_topic
+> Hello Fluss!
+> This is a Kafka message.
+
+# Consume messages
+kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic my_topic --from-beginning
+Hello Fluss!
+This is a Kafka message.
+```
+
 ### Use PostgreSQL Protocol
 
 ```bash
@@ -261,6 +281,13 @@ Query Fluss tables using standard SQL:
 - PostgreSQL-compatible ORMs (SQLAlchemy, Hibernate)
 - Ad-hoc analysis with familiar SQL syntax
 - Integration with PostgreSQL ecosystem
+
+### 6. Streaming Integration with Kafka
+Bridge your event-driven architecture with Fluss:
+- Ingest real-time events from existing Kafka producers
+- Consume Fluss changelogs using standard Kafka consumers
+- Seamless integration with the Kafka ecosystem (Connect, KSQL, etc.)
+- Unified storage for both streaming events and relational data
 
 ---
 

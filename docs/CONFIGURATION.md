@@ -12,7 +12,8 @@ Complete configuration guide for Fluss CAPE.
 4. [Fluss Client Options](#fluss-client-options)
 5. [HBase Protocol Options](#hbase-protocol-options)
 6. [Redis Protocol Options](#redis-protocol-options)
-7. [Performance Tuning](#performance-tuning)
+7. [Kafka Protocol Options](#kafka-protocol-options)
+8. [Performance Tuning](#performance-tuning)
 8. [Security Configuration](#security-configuration)
 9. [Environment Variables](#environment-variables)
 10. [Examples](#examples)
@@ -74,6 +75,15 @@ java -jar fluss-cape-1.0.0.jar [OPTIONS]
 | `--redis.max.connections` | Integer | `10000` | Maximum concurrent connections |
 | `--redis.database.count` | Integer | `16` | Number of logical databases (0-15) |
 
+### Kafka Protocol
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--kafka.enable` | Boolean | `true` | Enable Kafka protocol server |
+| `--kafka.bind.address` | String | `0.0.0.0` | Kafka server bind address |
+| `--kafka.bind.port` | Integer | `9092` | Kafka server port |
+| `--kafka.default.database` | String | `default` | Default database for topic mapping |
+
 ### PostgreSQL Protocol
 
 | Option | Type | Default | Description |
@@ -119,6 +129,12 @@ redis.enable=true
 redis.bind.host=0.0.0.0
 redis.bind.port=6379
 redis.worker.threads=8
+
+# Kafka protocol
+kafka.enable=true
+kafka.bind.address=0.0.0.0
+kafka.bind.port=9092
+kafka.default.database=default
 
 # PostgreSQL protocol
 pg.enabled=true
@@ -283,6 +299,37 @@ redis.database.count=16
 redis.timeout.ms=30000
 redis.pipeline.enabled=true
 redis.pipeline.batch.size=200
+```
+
+---
+
+## Kafka Protocol Options
+
+### Server Configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `kafka.bind.address` | String | `0.0.0.0` | Bind address |
+| `kafka.bind.port` | Integer | `9092` | Listen port |
+| `kafka.node.id` | Integer | `0` | Kafka broker node ID |
+
+### Topic Mapping
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `kafka.default.database` | String | `default` | Default Fluss database for topics |
+| `kafka.auto.create.tables` | Boolean | `true` | Auto-create Fluss tables for new topics |
+| `kafka.default.num.buckets` | Integer | `3` | Default buckets for auto-created tables |
+
+### Example
+
+```properties
+kafka.enable=true
+kafka.bind.address=0.0.0.0
+kafka.bind.port=9092
+kafka.default.database=streaming_db
+kafka.auto.create.tables=true
+kafka.default.num.buckets=5
 ```
 
 ---

@@ -140,14 +140,18 @@ This starts CAPE with:
 - Redis protocol **disabled**
 - Connects to Fluss at **localhost:9123**
 
-### Enable Both Protocols
+### Enable All Protocols (HBase, Redis, Kafka, PostgreSQL)
 
 ```bash
 java -jar fluss-cape-1.0.0.jar \
   --fluss.bootstrap.servers=localhost:9123 \
   --hbase.compat.bind.port=16020 \
   --redis.enable=true \
-  --redis.bind.port=6379
+  --redis.bind.port=6379 \
+  --kafka.enable=true \
+  --kafka.bind.port=9092 \
+  --pg.enabled=true \
+  --pg.port=5432
 ```
 
 ### Common Startup Configurations
@@ -276,6 +280,26 @@ import redis
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 r.set('test:key', 'Hello from Python')
 print(r.get('test:key'))  # Output: Hello from Python
+```
+
+### Test Kafka Protocol
+
+#### 1. Check Kafka Port is Listening
+
+```bash
+netstat -tuln | grep 9092
+# Expected: tcp        0      0 0.0.0.0:9092            0.0.0.0:*               LISTEN
+```
+
+#### 2. Use Kafka Tools
+
+```bash
+# Produce a message
+echo "Hello Fluss" | kafka-console-producer.sh --bootstrap-server localhost:9092 --topic test_topic
+
+# Consume messages
+kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test_topic --from-beginning --max-messages 1
+# Expected output: Hello Fluss
 ```
 
 ---
