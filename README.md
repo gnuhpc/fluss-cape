@@ -23,7 +23,8 @@ Fluss CAPE operates as a stateless proxy layer that performs **real-time protoco
 ### Log vs. KV Tables in CAPE
 Fluss provides two primary table types, both of which are leveraged by CAPE to provide multi-model capabilities:
 - **KV Tables (Primary Key Tables)**: Used primarily for **HBase** and **Redis**. These tables are optimized for low-latency point lookups and range scans. In HBase, the `row_key` maps to the Fluss primary key; in Redis, a composite key `(redis_key, sub_key)` is used to support complex data structures like Hashes and Sets.
-- **Log Tables**: Used primarily for the **Kafka protocol**. These are append-only tables optimized for high-throughput ingestion and sequential consumption. Every write to a KV table also generates a changelog in a Log table, enabling unified streaming access.
+- **Log Tables**: Used primarily for the **Kafka protocol**. These are append-only tables optimized for high-throughput ingestion and sequential consumption.
+- **Hybrid Support**: The **PostgreSQL protocol** primarily operates on **Primary Key Tables**, but leverages both their KV component (for snapshots/lookups) and Log component (for real-time changelog replay) to provide consistent SQL query results. Every write to a Primary Key table also generates a changelog in a Log table, enabling unified streaming access.
 
 ### 🌊 Lake-Stream Integration (湖流一体)
 Fluss CAPE fully inherits Fluss's "Lake-Stream Integration" architecture, providing a unified view of data:
