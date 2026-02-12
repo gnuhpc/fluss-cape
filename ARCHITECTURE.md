@@ -2,51 +2,50 @@
 
 ## Overview
 
-Fluss CAPE provides HBase and Redis protocol compatibility for Apache Fluss, enabling applications to interact with Fluss using familiar HBase/Redis APIs without code changes.
+Fluss CAPE provides HBase, Redis, Kafka, and PostgreSQL protocol compatibility for Apache Fluss, enabling applications to interact with Fluss using familiar APIs without code changes.
 
 **Key Design Principles:**
-- **Protocol Translation**: Standalone layer that translates HBase/Redis protocols to Fluss operations
+- **Protocol Translation**: Standalone layer that translates standard protocols to Fluss operations
 - **Zero Fluss Modifications**: CAPE runs as an external service, no changes to Fluss core
-- **Dynamic Table Management**: Create tables on-demand via HBase shell or Redis commands
-- **Horizontal Sharding**: Redis Cluster-style sharding for scalability
+- **Dynamic Table Management**: Create tables on-demand via protocol-specific commands
+- **Horizontal Scalability**: Stateless proxy design supports scaling out CAPE instances
 
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│         Client Applications                 │
-├──────────────┬──────────────────────────────┤
-│  HBase API   │      Redis Clients           │
-│  (Java/Spark)│  (redis-cli/Python/Node.js)  │
-└──────┬───────┴──────────────┬───────────────┘
-       │                      │
-       │ ZK Discovery         │ HAProxy LB
-       ▼                      ▼
-┌──────────────────────────────────────────────┐
-│       Fluss CAPE Servers (RegionServer)      │
-│  ┌─────────────────┬─────────────────────┐   │
-│  │ HBase Protocol  │  Redis Protocol     │   │
-│  │   Decoder       │   RESP Decoder      │   │
-│  ├─────────────────┼─────────────────────┤   │
-│  │ HBase Executors │ Redis Executors     │   │
-│  │  - Get/Put      │  - String/Hash/Set  │   │
-│  │  - Scan         │  - List/ZSet        │   │
-│  │  - Admin        │  - Stream/Geo/HLL   │   │
-│  └────────┬────────┴──────────┬──────────┘   │
-│           │                   │              │
-│           └──────┬────────────┘              │
-│                  ▼                           │
-│         Fluss Client Library                 │
-└──────────────────┬───────────────────────────┘
-                   │
-                   ▼
-        ┌─────────────────────────┐
-        │    Apache Fluss         │
-        │  (Distributed Storage)  │
-        │   - Coordinator         │
-        │   - Tablet Servers      │
-        │   - Log + KV Tables     │
-        └─────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Client Applications                              │
+├──────────────┬──────────────────────────────┬───────────────┬───────────────┤
+│  HBase API   │      Redis Clients           │ Kafka Clients │ SQL/PG Clients│
+│  (Java/Spark)│  (redis-cli/Python/Node.js)  │ (Consumer/Prod) (psql/DBeaver) │
+└──────┬───────┴──────────────┬───────────────┴───────┬───────┴───────┬───────┘
+       │                      │                       │               │
+       │ ZK Discovery         │ HAProxy LB            │ Direct/LB     │ Direct/LB
+       ▼                      ▼                       ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       Fluss CAPE Servers (Stateless Proxy)                  │
+│  ┌─────────────────┬───────────────────┬──────────────────┬───────────────┐ │
+│  │ HBase Protocol  │  Redis Protocol   │  Kafka Protocol  │  PG Protocol  │ │
+│  │   Decoder       │   RESP Decoder    │     Decoder      │    Decoder    │ │
+│  ├─────────────────┼───────────────────┼──────────────────┼───────────────┤ │
+│  │ HBase Executors │ Redis Executors   │ Kafka Handlers   │ PG Executors  │ │
+│  │  - Get/Put      │  - String/Hash/Set│  - Produce       │  - SQL Query  │ │
+│  │  - Scan         │  - List/ZSet      │  - Fetch         │  - DML/DDL    │ │
+│  │  - Admin        │  - Stream/Geo/HLL │  - Metadata      │  - Catalog    │ │
+│  └────────┬────────┴──────────┬────────┴──────────┬───────┴───────┬───────┘ │
+│           │                   │                   │               │         │
+│           └──────┬────────────┴─────────┬─────────┴───────────────┘         │
+│                  ▼                      ▼                                   │
+│         Fluss KV Table API      Fluss Log Table API                         │
+└──────────────────┬──────────────────────┬───────────────────────────────────┘
+                   │                      │
+                   ▼                      ▼
+        ┌─────────────────────────────────────────────────────┐
+        │                 Apache Fluss Cluster                │
+        │  (Distributed Streaming & Relational Storage)       │
+        │   - Coordinator (Metadata & Balancing)              │
+        │   - Tablet Servers (Data Storage & Execution)       │
+        └─────────────────────────────────────────────────────┘
 ```
 
 ## CAPE as HBase RegionServer
@@ -82,25 +81,6 @@ Fluss CAPE provides HBase and Redis protocol compatibility for Apache Fluss, ena
 
 3. Client-side load balancing handles requests across CAPE instances
 
-**Key Differences from Real HBase**:
-- Real HBase: Clients → ZK → Master → Meta table → RegionServer assignment
-- CAPE: Clients → ZK → Direct CAPE instance (simplified - no region assignment)
-
-### Port Configuration
-
-**Standard HBase Ports**:
-```
-Master RPC:           16000  (CAPE does NOT use)
-Master Web UI:        16010  (CAPE does NOT use)
-RegionServer RPC:     16020  (CAPE default)
-RegionServer Web UI:  16030  (CAPE can optionally expose)
-```
-
-**CAPE Default Configuration**:
-- Primary instance: `16020` (matches RegionServer default)
-- Additional instances: `16021`, `16022`, etc. (sequential)
-- Configuration: `hbase.compat.bind.port=16020`
-
 ## Component Details
 
 ### 1. Protocol Decoders
@@ -115,11 +95,21 @@ RegionServer Web UI:  16030  (CAPE can optionally expose)
 - Handles pipelined commands
 - Supports RESP2 protocol
 
+**Kafka Wire Decoder**:
+- Implements Kafka Wire Protocol (Request/Response)
+- Decodes RecordBatches for efficient message handling
+- Supports API versions compatible with Kafka 3.x clients
+
+**PostgreSQL Decoder**:
+- Implements PG Frontend/Backend protocol
+- Handles startup messages, simple/extended queries
+- Supports SSL negotiation and standard authentication
+
 ### 2. Command Executors
 
 **HBase Executors**:
 - Single-row operations (Get, Put)
-- Range scan operations
+- Range scan operations (Translated to Fluss Lookups/Scans)
 - Batch operations
 - Admin operations for table management
 
@@ -130,46 +120,40 @@ RegionServer Web UI:  16030  (CAPE can optionally expose)
 - List operations (LPUSH, RPOP, LRANGE, etc.)
 - Sorted Set operations (ZADD, ZRANGE, ZSCORE, etc.)
 - Stream operations (XADD, XRANGE, XREAD, etc.)
-- Geo operations (GEOADD, GEODIST)
-- HyperLogLog operations (PFADD, PFCOUNT)
+
+**Kafka Handlers**:
+- **Produce**: Append-only writes to Fluss Log tables
+- **Fetch**: Sequential reads from Log segments
+- **Metadata**: Real-time mapping of Fluss table/partition info to Kafka topics
+
+**PostgreSQL Executors**:
+- **Calcite-based SQL Engine**: Parses and optimizes SQL queries
+- **Hybrid Scan**: Combines KV snapshots and Log changelogs for consistent reads
+- **Catalog Service**: Maps Fluss metadata to PG `information_schema`
 
 ### 3. Storage Adapters
 
-**Redis Storage Layer**:
-
-```
-RedisStorageAdapter (interface)
-   ├── RedisSingleTableAdapter (legacy, single table mode)
-   └── RedisShardedAdapter (recommended, sharded mode)
-```
-
-**Key Features:**
-- **Polymorphic Interface**: Executors use `RedisStorageAdapter` interface
-- **Transparent Sharding**: Sharding logic encapsulated in adapters
-- **Lazy Loading**: Tables/writers created on-demand
-- **Slot Routing**: CRC16 hash → slot → shard mapping
+**Unified Multi-Model Storage**:
+CAPE leverages Fluss's dual-engine capability:
+- **KV Adapter**: Maps Key-Value protocols (HBase/Redis) to Primary Key tables.
+- **Log Adapter**: Maps Messaging protocols (Kafka) to Log tables.
+- **Changelog Bridge**: Mutations in KV tables are automatically exposed as Logs, allowing Kafka clients to consume HBase/Redis updates in real-time.
 
 ### 4. Table Management
 
 **Dynamic Table Creation**:
 - HBase tables created via Admin API
 - Redis tables created automatically on first use
-- Schema-on-write for flexible column families/fields
-
-**Table Naming Convention**:
-- HBase: `{database}.{table_name}` (e.g., `default.users`)
-- Redis Sharded: `redis_shard_{XX}` (XX = 00-15)
-- Redis Single: `redis_internal_data`
-
-
+- Kafka topics automatically map to Fluss Log tables (auto-creation supported)
+- PG tables map to Fluss databases/tables
 
 ## Data Flow
 
 CAPE translates protocol-specific operations into Fluss table operations:
 
-- **HBase operations** are converted to Fluss row operations
-- **Redis operations** are routed through storage adapters that handle sharding and table mapping
-- **All data** flows through the Fluss Client Library to the distributed storage layer
+- **HBase/Redis operations** are converted to Fluss row operations on KV tables.
+- **Kafka operations** flow directly into Fluss Log tables.
+- **SQL queries** are executed via a hybrid engine that queries both KV and Log components to ensure data freshness.
 
 ## References
 
