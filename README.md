@@ -10,12 +10,26 @@ Transform Apache Fluss into a multi-model database by adding HBase, Redis, Kafka
 
 Fluss CAPE is an external compatibility layer that enables applications to interact with [Apache Fluss](https://github.com/alibaba/fluss) using familiar HBase, Redis, Kafka, and PostgreSQL protocols—without modifying Fluss itself.
 
-**Key Benefits:**
-- 🔌 **Zero Fluss Modifications** - Runs as a standalone translation layer
-- 🚀 **Instant Migration** - Use existing HBase/Redis/Kafka/PostgreSQL applications with Fluss
-- 🔄 **Unified Storage** - Access the same data through multiple protocols
-- ⚡ **Scalable** - Horizontal scaling with multiple CAPE instances
-- 📊 **Production-Ready** - Multiple deployment modes (standalone, clustered, co-located)
+---
+
+## 🏗️ Core Concepts & Principles
+
+### Protocol Translation Architecture
+Fluss CAPE operates as a stateless proxy layer that performs **real-time protocol translation**:
+1. **Decode**: Receives requests via standard protocol handlers (HBase RPC, Redis RESP, Kafka Wire, PG Wire).
+2. **Translate**: Maps protocol-specific operations (e.g., `HSET`, `Put`, `Produce`) to Fluss native table operations.
+3. **Execute**: Uses the high-performance Fluss Client to interact with the underlying distributed storage.
+
+### Log vs. KV Tables in CAPE
+Fluss provides two primary table types, both of which are leveraged by CAPE to provide multi-model capabilities:
+- **KV Tables (Primary Key Tables)**: Used primarily for **HBase** and **Redis**. These tables are optimized for low-latency point lookups and range scans. In HBase, the `row_key` maps to the Fluss primary key; in Redis, a composite key `(redis_key, sub_key)` is used to support complex data structures like Hashes and Sets.
+- **Log Tables**: Used primarily for the **Kafka protocol**. These are append-only tables optimized for high-throughput ingestion and sequential consumption. Every write to a KV table also generates a changelog in a Log table, enabling unified streaming access.
+
+### 🌊 Lake-Stream Integration (湖流一体)
+Fluss CAPE fully inherits Fluss's "Lake-Stream Integration" architecture, providing a unified view of data:
+- **Unified Interface**: Write data via a "streaming" protocol (Kafka) and immediately query it via a "database" protocol (PostgreSQL/HBase).
+- **Changelog as Stream**: All mutations in HBase or Redis tables are automatically captured as Fluss changelogs, which can be consumed via the Kafka protocol for downstream real-time processing.
+- **Snapshot + Incremental**: The PostgreSQL protocol uses a hybrid scan strategy that combines KV snapshots with recent logs to ensure data consistency and freshness.
 
 ---
 
