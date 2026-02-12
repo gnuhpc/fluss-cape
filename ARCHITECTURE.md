@@ -12,7 +12,7 @@ Fluss CAPE provides HBase, Redis, Kafka, and PostgreSQL protocol compatibility f
 
 ## High-Level Architecture
 
-![Architecture](docs/img/arch_1.jpg)
+![Architecture](docs/img/arch_1_minimal.jpg)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -143,7 +143,7 @@ CAPE leverages Fluss's dual-engine capability:
 
 ## Data Flow & Lake-Stream Integration
 
-![Data Flow](docs/img/arch_2.jpg)
+![Data Flow](docs/img/arch_2_minimal.jpg)
 
 CAPE translates protocol-specific operations into Fluss table operations:
 

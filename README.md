@@ -17,7 +17,7 @@ Fluss CAPE is an external compatibility layer that enables applications to inter
 ### Protocol Translation Architecture
 Fluss CAPE operates as a stateless proxy layer that performs **real-time protocol translation**:
 
-![Architecture](docs/img/arch_1.jpg)
+![Architecture](docs/img/arch_1_minimal.jpg)
 
 1. **Decode**: Receives requests via standard protocol handlers (HBase RPC, Redis RESP, Kafka Wire, PG Wire).
 2. **Translate**: Maps protocol-specific operations (e.g., `HSET`, `Put`, `Produce`) to Fluss native table operations.
@@ -32,7 +32,7 @@ Fluss provides two primary table types, both of which are leveraged by CAPE to p
 ### 🌊 Lake-Stream Integration (湖流一体)
 Fluss CAPE fully inherits Fluss's "Lake-Stream Integration" architecture, providing a unified view of data:
 
-![Data Flow](docs/img/arch_2.jpg)
+![Data Flow](docs/img/arch_2_minimal.jpg)
 
 - **Unified Interface**: Write data via a "streaming" protocol (Kafka) and immediately query it via a "database" protocol (PostgreSQL/HBase).
 - **Changelog as Stream**: All mutations in HBase or Redis tables are automatically captured as Fluss changelogs, which can be consumed via the Kafka protocol for downstream real-time processing.
