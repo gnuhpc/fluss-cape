@@ -12,6 +12,8 @@ Fluss CAPE provides HBase, Redis, Kafka, and PostgreSQL protocol compatibility f
 
 ## High-Level Architecture
 
+![Architecture](docs/img/arch_1.jpg)
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            Client Applications                              │
@@ -139,15 +141,9 @@ CAPE leverages Fluss's dual-engine capability:
 - **Log Adapter**: Maps Messaging protocols (Kafka) to Log tables.
 - **Changelog Bridge**: Mutations in KV tables are automatically exposed as Logs, allowing Kafka clients to consume HBase/Redis updates in real-time.
 
-### 4. Table Management
+## Data Flow & Lake-Stream Integration
 
-**Dynamic Table Creation**:
-- HBase tables created via Admin API
-- Redis tables created automatically on first use
-- Kafka topics automatically map to Fluss Log tables (auto-creation supported)
-- PG tables map to Fluss databases/tables
-
-## Data Flow
+![Data Flow](docs/img/arch_2.jpg)
 
 CAPE translates protocol-specific operations into Fluss table operations:
 
